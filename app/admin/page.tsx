@@ -15,6 +15,7 @@ import { db } from "../../lib/firebase";
 
 interface Booking {
   id: string;
+  shortId?: string; // เพิ่มตัวแปร shortId เข้ามาในนี้
   customerName?: string;
   customerTel?: string;
   sportType?: string;
@@ -332,8 +333,14 @@ export default function AdminPage() {
                             key={booking.id}
                             className="hover:bg-gray-50/70 transition-colors"
                           >
-                            <td className="px-5 py-4 text-xs text-gray-400 font-mono">
-                              {booking.id.slice(0, 8)}…
+                            <td className="px-5 py-4">
+                              {/* ─── เปลี่ยนการแสดงผลรหัสตรงนี้ ─── */}
+                              <span className="font-bold text-gray-800 text-base block mb-0.5">
+                                {booking.shortId || "ไม่มีรหัสย่อ"}
+                              </span>
+                              <span className="text-[10px] text-gray-400 font-mono">
+                                Ref: {booking.id.slice(0, 8)}…
+                              </span>
                             </td>
                             <td className="px-5 py-4">
                               <p className="font-semibold text-gray-800">
@@ -446,10 +453,8 @@ export default function AdminPage() {
                   return (
                     <div
                       key={dk}
-                      className={`flex-shrink-0 flex flex-col items-center px-3 py-2 rounded-xl min-w-[52px] ${
-                        isToday ? "ring-2" : ""
-                      }`}
-                      style={isToday ? { ringColor: sportCfg.color } : {}}
+                      className="flex-shrink-0 flex flex-col items-center px-3 py-2 rounded-xl min-w-[52px]"
+                      style={isToday ? { outline: `2px solid ${sportCfg.color}`, outlineOffset: "1px" } : {}}
                     >
                       <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">
                         {date.toLocaleDateString("th-TH", { weekday: "short" })}
@@ -517,6 +522,7 @@ export default function AdminPage() {
                               key={toDateKey(date)}
                               colSpan={sportCfg.courts}
                               className="px-2 py-2 text-center text-xs font-semibold text-gray-600 border-r border-gray-100 last:border-r-0"
+                              style={isSameDay(date, new Date()) ? { outline: `2px solid ${sportCfg.color}`, outlineOffset: "-2px" } : {}}
                             >
                               <span
                                 className={
