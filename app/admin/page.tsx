@@ -15,7 +15,6 @@ import { db } from "../../lib/firebase";
 
 interface Booking {
   id: string;
-  shortId?: string; // เพิ่มตัวแปร shortId เข้ามาในนี้
   customerName?: string;
   customerTel?: string;
   sportType?: string;
@@ -30,11 +29,11 @@ interface Booking {
 
 const SPORT_CONFIG: Record<
   string,
-  { label: string; emoji: string; courts: number; color: string }
+  { label: string; emoji: string; courts: number; color: string; lightColor: string }
 > = {
-  football:   { label: "ฟุตบอล",      emoji: "⚽", courts: 2, color: "#16a34a" },
-  badminton:  { label: "แบดมินตัน",  emoji: "🏸", courts: 4, color: "#2563eb" },
-  basketball: { label: "บาสเก็ตบอล", emoji: "🏀", courts: 2, color: "#ea580c" },
+  football:   { label: "ฟุตบอล",      emoji: "⚽", courts: 2, color: "#16a34a", lightColor: "#f0fdf4" },
+  badminton:  { label: "แบดมินตัน",  emoji: "🏸", courts: 4, color: "#2563eb", lightColor: "#eff6ff" },
+  basketball: { label: "บาสเก็ตบอล", emoji: "🏀", courts: 2, color: "#ea580c", lightColor: "#fff7ed" },
 };
 
 const TIME_SLOTS = [
@@ -43,21 +42,13 @@ const TIME_SLOTS = [
 ];
 
 const STATUS_CONFIG = {
-  pending:   { label: "รออัปโหลดสลิป", bg: "bg-gray-100",   text: "text-gray-600"   },
-  uploaded:  { label: "รอตรวจสอบ",     bg: "bg-yellow-100", text: "text-yellow-700" },
-  confirmed: { label: "ยืนยันแล้ว",    bg: "bg-green-100",  text: "text-green-700"  },
-  cancelled: { label: "ยกเลิกแล้ว",   bg: "bg-red-100",    text: "text-red-700"    },
+  pending:   { label: "รออัปโหลดสลิป", short: "รอสลิป",   color: "#6b7280", bg: "#f3f4f6", dot: "#9ca3af" },
+  uploaded:  { label: "รอตรวจสอบสลิป", short: "รอตรวจ",   color: "#92400e", bg: "#fef3c7", dot: "#f59e0b" },
+  confirmed: { label: "ยืนยันแล้ว",    short: "ยืนยัน",   color: "#14532d", bg: "#dcfce7", dot: "#22c55e" },
+  cancelled: { label: "ยกเลิกแล้ว",   short: "ยกเลิก",   color: "#7f1d1d", bg: "#fee2e2", dot: "#ef4444" },
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function getDateRange(start: Date, days = 7): Date[] {
-  return Array.from({ length: days }, (_, i) => {
-    const d = new Date(start);
-    d.setDate(d.getDate() + i);
-    return d;
-  });
-}
 
 function isSameDay(a: Date, b: Date) {
   return (
@@ -71,15 +62,119 @@ function toDateKey(d: Date) {
   return d.toISOString().split("T")[0];
 }
 
+function addDays(d: Date, n: number) {
+  const r = new Date(d);
+  r.setDate(r.getDate() + n);
+  return r;
+}
+
 // ─── StatusBadge ─────────────────────────────────────────────────────────────
 
 function StatusBadge({ status }: { status: string }) {
   const cfg = STATUS_CONFIG[status as keyof typeof STATUS_CONFIG];
   if (!cfg) return null;
   return (
-    <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${cfg.bg} ${cfg.text}`}>
+    <span
+      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold"
+      style={{ backgroundColor: cfg.bg, color: cfg.color }}
+    >
+      <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ backgroundColor: cfg.dot }} />
       {cfg.label}
     </span>
+  );
+}
+
+// ─── BookingDetailModal ───────────────────────────────────────────────────────
+
+function BookingDetailModal({
+  booking,
+  sportCfg,
+  onClose,
+  onConfirm,
+  onCancel,
+}: {
+  booking: Booking;
+  sportCfg: typeof SPORT_CONFIG[string];
+  onClose: () => void;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const st = booking.startTime?.toDate();
+  const timeStr = st
+    ? `${st.toLocaleDateString("th-TH", { weekday: "long", day: "numeric", month: "long", year: "numeric" })} เวลา ${st.getHours().toString().padStart(2, "0")}:00 น.`
+    : "—";
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-xl">{sportCfg.emoji}</span>
+            <span className="font-bold text-gray-800">
+              {sportCfg.label} สนาม {booking.courtNumber}
+            </span>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl font-bold">✕</button>
+        </div>
+
+        {/* Body */}
+        <div className="px-6 py-5 space-y-4">
+          <div className="flex items-start gap-3 p-3 bg-gray-50 rounded-xl">
+            <span className="text-2xl">👤</span>
+            <div>
+              <p className="font-bold text-gray-800 text-lg leading-tight">{booking.customerName || "ไม่ระบุชื่อ"}</p>
+              <p className="text-gray-500 text-sm">{booking.customerTel || "—"}</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl">
+            <span className="text-2xl">🕐</span>
+            <p className="text-gray-700 text-sm font-medium">{timeStr}</p>
+          </div>
+
+          <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl">
+            <span className="text-2xl">📋</span>
+            <StatusBadge status={booking.status || ""} />
+          </div>
+
+          {booking.slipImageBase64 && (
+            <div>
+              <p className="text-xs text-gray-400 font-semibold mb-2">หลักฐานการโอนเงิน</p>
+              <img
+                src={booking.slipImageBase64}
+                alt="slip"
+                className="w-full rounded-xl border border-gray-100 max-h-64 object-contain bg-gray-50"
+              />
+            </div>
+          )}
+        </div>
+
+        {/* Actions */}
+        <div className="px-6 pb-5 flex gap-3">
+          <button
+            onClick={onConfirm}
+            disabled={booking.status === "confirmed" || booking.status === "cancelled"}
+            className="flex-1 py-3 bg-green-500 hover:bg-green-600 disabled:bg-gray-200 disabled:text-gray-400 text-white font-bold rounded-xl transition-colors"
+          >
+            ✓ อนุมัติ
+          </button>
+          <button
+            onClick={onCancel}
+            disabled={booking.status === "cancelled"}
+            className="flex-1 py-3 bg-red-500 hover:bg-red-600 disabled:bg-gray-200 disabled:text-gray-400 text-white font-bold rounded-xl transition-colors"
+          >
+            ✕ ยกเลิก
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -95,12 +190,18 @@ export default function AdminPage() {
 
   const [view, setView] = useState<"list" | "calendar">("list");
   const [selectedSport, setSelectedSport] = useState("football");
-  const [calendarStart, setCalendarStart] = useState(() => {
+  const [selectedDate, setSelectedDate] = useState(() => {
     const d = new Date();
     d.setHours(0, 0, 0, 0);
     return d;
   });
-  const [selectedSlip, setSelectedSlip] = useState<string | null>(null);
+  const [weekStart, setWeekStart] = useState(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  });
+
+  const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null);
 
   // ── Auth ──────────────────────────────────────────────────────────────────
 
@@ -123,15 +224,10 @@ export default function AdminPage() {
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
-        setBookings(
-          snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Booking))
-        );
+        setBookings(snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Booking)));
         setIsLoading(false);
       },
-      (err) => {
-        console.error(err);
-        setIsLoading(false);
-      }
+      (err) => { console.error(err); setIsLoading(false); }
     );
     return () => unsubscribe();
   }, [isAuthenticated]);
@@ -139,36 +235,45 @@ export default function AdminPage() {
   // ── Update status ──────────────────────────────────────────────────────────
 
   const updateBookingStatus = async (bookingId: string, newStatus: string) => {
-    const label =
-      STATUS_CONFIG[newStatus as keyof typeof STATUS_CONFIG]?.label ?? newStatus;
+    const label = STATUS_CONFIG[newStatus as keyof typeof STATUS_CONFIG]?.label ?? newStatus;
     if (!confirm(`เปลี่ยนสถานะเป็น "${label}"?`)) return;
     try {
       await updateDoc(doc(db, "bookings", bookingId), { status: newStatus });
+      setSelectedBooking(null);
     } catch {
       alert("เกิดข้อผิดพลาดในการอัปเดตสถานะ");
     }
   };
 
-  // ── Derived: booking map for calendar ─────────────────────────────────────
-  // bookingMap[dateKey][court][time] = Booking
+  // ── Derived ────────────────────────────────────────────────────────────────
 
-  const bookingMap: Record<string, Record<string, Record<string, Booking>>> = {};
+  const sportCfg = SPORT_CONFIG[selectedSport];
+  const courts = Array.from({ length: sportCfg.courts }, (_, i) => String(i + 1));
+  const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
+  const dk = toDateKey(selectedDate);
+
+  // bookingMap[court][time] = Booking  (filtered to selectedDate + selectedSport)
+  const bookingMap: Record<string, Record<string, Booking>> = {};
   bookings.forEach((b) => {
     if (b.sportType !== selectedSport) return;
     if (!b.startTime || b.status === "cancelled") return;
     const d = b.startTime.toDate();
-    const dk = toDateKey(d);
+    if (!isSameDay(d, selectedDate)) return;
     const court = String(b.courtNumber);
     const time = `${d.getHours().toString().padStart(2, "0")}:00`;
-    bookingMap[dk] ??= {};
-    bookingMap[dk][court] ??= {};
-    bookingMap[dk][court][time] = b;
+    bookingMap[court] ??= {};
+    bookingMap[court][time] = b;
   });
 
-  const sportCfg = SPORT_CONFIG[selectedSport];
-  const dateRange = getDateRange(calendarStart, 7);
+  // Count bookings per day for dots
+  const bookingsByDay: Record<string, number> = {};
+  bookings.forEach((b) => {
+    if (b.sportType !== selectedSport || !b.startTime || b.status === "cancelled") return;
+    const key = toDateKey(b.startTime.toDate());
+    bookingsByDay[key] = (bookingsByDay[key] ?? 0) + 1;
+  });
 
-  // ── Login screen ──────────────────────────────────────────────────────────
+  // ── Login ──────────────────────────────────────────────────────────────────
 
   if (!isAuthenticated) {
     return (
@@ -176,9 +281,7 @@ export default function AdminPage() {
         <div className="bg-white p-8 rounded-2xl shadow-2xl max-w-sm w-full text-center">
           <div className="text-4xl mb-3">🔐</div>
           <h2 className="text-2xl font-bold text-gray-800 mb-1">Staff Only</h2>
-          <p className="text-gray-500 text-sm mb-6">
-            กรุณาใส่รหัส PIN เพื่อเข้าสู่ระบบ
-          </p>
+          <p className="text-gray-500 text-sm mb-6">กรุณาใส่รหัส PIN เพื่อเข้าสู่ระบบ</p>
           <form onSubmit={handleLogin}>
             <input
               type="password"
@@ -189,10 +292,7 @@ export default function AdminPage() {
               placeholder="••••"
               autoFocus
             />
-            <button
-              type="submit"
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl transition-all"
-            >
+            <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl transition-all">
               เข้าสู่ระบบ
             </button>
           </form>
@@ -206,9 +306,9 @@ export default function AdminPage() {
   return (
     <div className="min-h-screen bg-gray-50">
 
-      {/* ── Top bar ── */}
-      <div className="bg-white border-b border-gray-200 px-6 py-4 sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3">
+      {/* Top bar */}
+      <div className="bg-white border-b border-gray-200 px-6 py-4 sticky top-0 z-20">
+        <div className="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <span className="text-xl font-bold text-gray-800">Staff Dashboard</span>
             <span className="flex items-center gap-1.5 px-2.5 py-0.5 bg-green-100 text-green-700 rounded-full text-xs font-semibold">
@@ -216,25 +316,16 @@ export default function AdminPage() {
               Live
             </span>
           </div>
-          {/* View toggle */}
           <div className="flex items-center bg-gray-100 rounded-xl p-1 gap-1">
             <button
               onClick={() => setView("list")}
-              className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-all ${
-                view === "list"
-                  ? "bg-white text-gray-800 shadow-sm"
-                  : "text-gray-500 hover:text-gray-700"
-              }`}
+              className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-all ${view === "list" ? "bg-white text-gray-800 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
             >
               📋 รายการ
             </button>
             <button
               onClick={() => setView("calendar")}
-              className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-all ${
-                view === "calendar"
-                  ? "bg-white text-gray-800 shadow-sm"
-                  : "text-gray-500 hover:text-gray-700"
-              }`}
+              className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-all ${view === "calendar" ? "bg-white text-gray-800 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
             >
               📅 ตารางสนาม
             </button>
@@ -242,48 +333,31 @@ export default function AdminPage() {
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 py-6 space-y-5">
+      <div className="max-w-6xl mx-auto px-4 py-6 space-y-5">
 
-        {/* ── Sport selector ── */}
+        {/* Sport selector */}
         <div className="flex flex-wrap gap-3">
           {Object.entries(SPORT_CONFIG).map(([key, cfg]) => {
-            const total = bookings.filter(
-              (b) => b.sportType === key && b.status !== "cancelled"
-            ).length;
-            const waitingReview = bookings.filter(
-              (b) => b.sportType === key && b.status === "uploaded"
-            ).length;
+            const total = bookings.filter((b) => b.sportType === key && b.status !== "cancelled").length;
+            const waiting = bookings.filter((b) => b.sportType === key && b.status === "uploaded").length;
             const isActive = selectedSport === key;
-
             return (
               <button
                 key={key}
                 onClick={() => setSelectedSport(key)}
                 className={`flex items-center gap-3 px-5 py-3 rounded-2xl border-2 font-semibold transition-all ${
-                  isActive
-                    ? "text-white shadow-md scale-[1.02] border-transparent"
-                    : "bg-white border-gray-200 text-gray-600 hover:border-gray-300 hover:shadow-sm"
+                  isActive ? "text-white shadow-md scale-[1.02] border-transparent" : "bg-white border-gray-200 text-gray-600 hover:border-gray-300"
                 }`}
                 style={isActive ? { backgroundColor: cfg.color } : {}}
               >
                 <span className="text-2xl leading-none">{cfg.emoji}</span>
                 <div className="text-left leading-tight">
                   <div className="text-sm">{cfg.label}</div>
-                  <div
-                    className={`text-xs mt-0.5 ${
-                      isActive ? "text-white/75" : "text-gray-400"
-                    }`}
-                  >
+                  <div className={`text-xs mt-0.5 ${isActive ? "text-white/75" : "text-gray-400"}`}>
                     {total} การจอง
-                    {waitingReview > 0 && (
-                      <span
-                        className={`ml-1.5 px-1.5 py-0.5 rounded-full text-xs font-bold ${
-                          isActive
-                            ? "bg-white/25 text-white"
-                            : "bg-yellow-100 text-yellow-700"
-                        }`}
-                      >
-                        {waitingReview} รอตรวจ
+                    {waiting > 0 && (
+                      <span className={`ml-1.5 px-1.5 py-0.5 rounded-full text-xs font-bold ${isActive ? "bg-white/25 text-white" : "bg-yellow-100 text-yellow-700"}`}>
+                        {waiting} รอตรวจ
                       </span>
                     )}
                   </div>
@@ -293,9 +367,7 @@ export default function AdminPage() {
           })}
         </div>
 
-        {/* ════════════════════════════════════════════
-            VIEW: LIST
-        ════════════════════════════════════════════ */}
+        {/* ═══════════════════════════ LIST VIEW ═══════════════════════════ */}
         {view === "list" && (
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
             {isLoading ? (
@@ -305,7 +377,6 @@ export default function AdminPage() {
                 <table className="w-full text-left">
                   <thead>
                     <tr className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide border-b border-gray-100">
-                      <th className="px-5 py-3 font-semibold">รหัสการจอง</th>
                       <th className="px-5 py-3 font-semibold">ลูกค้า</th>
                       <th className="px-5 py-3 font-semibold">สนาม / เวลา</th>
                       <th className="px-5 py-3 font-semibold">สถานะ</th>
@@ -319,60 +390,26 @@ export default function AdminPage() {
                       .map((booking) => {
                         const st = booking.startTime?.toDate();
                         const timeStr = st
-                          ? `${st.toLocaleDateString("th-TH", {
-                              day: "numeric",
-                              month: "short",
-                            })} เวลา ${st
-                              .getHours()
-                              .toString()
-                              .padStart(2, "0")}:00`
+                          ? `${st.toLocaleDateString("th-TH", { day: "numeric", month: "short" })} เวลา ${st.getHours().toString().padStart(2, "0")}:00`
                           : "ไม่ระบุ";
-
                         return (
-                          <tr
-                            key={booking.id}
-                            className="hover:bg-gray-50/70 transition-colors"
-                          >
+                          <tr key={booking.id} className="hover:bg-gray-50/70 transition-colors">
                             <td className="px-5 py-4">
-                              {/* ─── เปลี่ยนการแสดงผลรหัสตรงนี้ ─── */}
-                              <span className="font-bold text-gray-800 text-base block mb-0.5">
-                                {booking.shortId || "ไม่มีรหัสย่อ"}
-                              </span>
-                              <span className="text-[10px] text-gray-400 font-mono">
-                                Ref: {booking.id.slice(0, 8)}…
-                              </span>
+                              <p className="font-semibold text-gray-800">{booking.customerName || "ไม่ระบุ"}</p>
+                              <p className="text-xs text-gray-400">{booking.customerTel || "—"}</p>
                             </td>
                             <td className="px-5 py-4">
-                              <p className="font-semibold text-gray-800">
-                                {booking.customerName || "ไม่ระบุ"}
-                              </p>
-                              <p className="text-xs text-gray-400">
-                                {booking.customerTel || "—"}
-                              </p>
-                            </td>
-                            <td className="px-5 py-4">
-                              <span
-                                className="inline-flex items-center gap-1 text-sm font-semibold"
-                                style={{ color: sportCfg.color }}
-                              >
-                                {sportCfg.emoji} {sportCfg.label} สนาม{" "}
-                                {booking.courtNumber}
+                              <span className="inline-flex items-center gap-1 text-sm font-semibold" style={{ color: sportCfg.color }}>
+                                {sportCfg.emoji} {sportCfg.label} สนาม {booking.courtNumber}
                               </span>
-                              <p className="text-xs text-gray-400 mt-0.5">
-                                {timeStr}
-                              </p>
+                              <p className="text-xs text-gray-400 mt-0.5">{timeStr}</p>
                             </td>
                             <td className="px-5 py-4">
                               <StatusBadge status={booking.status || ""} />
                             </td>
                             <td className="px-5 py-4">
                               {booking.slipImageBase64 ? (
-                                <button
-                                  onClick={() =>
-                                    setSelectedSlip(booking.slipImageBase64!)
-                                  }
-                                  className="text-blue-500 hover:underline text-sm font-medium"
-                                >
+                                <button onClick={() => setSelectedBooking(booking)} className="text-blue-500 hover:underline text-sm font-medium">
                                   ดูสลิป
                                 </button>
                               ) : (
@@ -382,21 +419,14 @@ export default function AdminPage() {
                             <td className="px-5 py-4">
                               <div className="flex gap-2">
                                 <button
-                                  onClick={() =>
-                                    updateBookingStatus(booking.id, "confirmed")
-                                  }
-                                  disabled={
-                                    booking.status === "confirmed" ||
-                                    booking.status === "cancelled"
-                                  }
+                                  onClick={() => updateBookingStatus(booking.id, "confirmed")}
+                                  disabled={booking.status === "confirmed" || booking.status === "cancelled"}
                                   className="px-3 py-1.5 bg-green-500 hover:bg-green-600 disabled:bg-gray-200 disabled:text-gray-400 text-white rounded-lg text-xs font-semibold transition-colors"
                                 >
                                   อนุมัติ
                                 </button>
                                 <button
-                                  onClick={() =>
-                                    updateBookingStatus(booking.id, "cancelled")
-                                  }
+                                  onClick={() => updateBookingStatus(booking.id, "cancelled")}
                                   disabled={booking.status === "cancelled"}
                                   className="px-3 py-1.5 bg-red-500 hover:bg-red-600 disabled:bg-gray-200 disabled:text-gray-400 text-white rounded-lg text-xs font-semibold transition-colors"
                                 >
@@ -409,315 +439,193 @@ export default function AdminPage() {
                       })}
                   </tbody>
                 </table>
-                {bookings.filter((b) => b.sportType === selectedSport).length ===
-                  0 && (
-                  <p className="text-center py-14 text-gray-400">
-                    ไม่มีการจองสำหรับ{sportCfg.label}
-                  </p>
+                {bookings.filter((b) => b.sportType === selectedSport).length === 0 && (
+                  <p className="text-center py-14 text-gray-400">ไม่มีการจองสำหรับ{sportCfg.label}</p>
                 )}
               </div>
             )}
           </div>
         )}
 
-        {/* ════════════════════════════════════════════
-            VIEW: CALENDAR
-        ════════════════════════════════════════════ */}
+        {/* ════════════════════════ CALENDAR VIEW ═════════════════════════ */}
         {view === "calendar" && (
           <div className="space-y-4">
 
-            {/* Date navigator */}
-            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-3 flex items-center gap-2">
-              <button
-                onClick={() => {
-                  const d = new Date(calendarStart);
-                  d.setDate(d.getDate() - 7);
-                  setCalendarStart(d);
-                }}
-                className="w-9 h-9 flex-shrink-0 rounded-xl bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-600 font-bold text-lg transition-colors"
-              >
-                ‹
-              </button>
-
-              <div className="flex gap-1.5 flex-1 overflow-x-auto pb-0.5">
-                {dateRange.map((date) => {
-                  const dk = toDateKey(date);
-                  const isToday = isSameDay(date, new Date());
-                  const dot = bookings.some(
-                    (b) =>
-                      b.sportType === selectedSport &&
-                      b.status !== "cancelled" &&
-                      b.startTime &&
-                      isSameDay(b.startTime.toDate(), date)
-                  );
-                  return (
-                    <div
-                      key={dk}
-                      className="flex-shrink-0 flex flex-col items-center px-3 py-2 rounded-xl min-w-[52px]"
-                      style={isToday ? { outline: `2px solid ${sportCfg.color}`, outlineOffset: "1px" } : {}}
-                    >
-                      <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">
-                        {date.toLocaleDateString("th-TH", { weekday: "short" })}
-                      </span>
-                      <span
-                        className={`text-lg font-bold leading-tight ${
-                          isToday ? "text-gray-800" : "text-gray-500"
-                        }`}
+            {/* ── Week date picker ── */}
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <button
+                  onClick={() => setWeekStart((d) => addDays(d, -7))}
+                  className="w-8 h-8 rounded-lg bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-600 font-bold transition-colors flex-shrink-0"
+                >
+                  ‹
+                </button>
+                <div className="flex gap-1.5 flex-1 justify-between">
+                  {weekDays.map((date) => {
+                    const isSelected = isSameDay(date, selectedDate);
+                    const isToday = isSameDay(date, new Date());
+                    const count = bookingsByDay[toDateKey(date)] ?? 0;
+                    return (
+                      <button
+                        key={toDateKey(date)}
+                        onClick={() => setSelectedDate(date)}
+                        className="flex-1 flex flex-col items-center py-2 px-1 rounded-xl transition-all"
+                        style={
+                          isSelected
+                            ? { backgroundColor: sportCfg.color, color: "#fff" }
+                            : isToday
+                            ? { backgroundColor: sportCfg.lightColor, color: sportCfg.color }
+                            : {}
+                        }
                       >
-                        {date.getDate()}
-                      </span>
-                      <span
-                        className="w-1.5 h-1.5 rounded-full mt-0.5"
-                        style={{
-                          backgroundColor: dot ? sportCfg.color : "transparent",
-                        }}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-
-              <button
-                onClick={() => {
-                  const d = new Date(calendarStart);
-                  d.setDate(d.getDate() + 7);
-                  setCalendarStart(d);
-                }}
-                className="w-9 h-9 flex-shrink-0 rounded-xl bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-600 font-bold text-lg transition-colors"
-              >
-                ›
-              </button>
-            </div>
-
-            {/* Schedule table */}
-            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-              {/* Header */}
-              <div
-                className="px-5 py-3 border-b border-gray-100 flex items-center gap-2"
-              >
-                <span className="text-xl">{sportCfg.emoji}</span>
-                <span className="font-bold text-gray-800">{sportCfg.label}</span>
-                <span className="text-sm text-gray-400">
-                  — {sportCfg.courts} สนาม
-                </span>
-              </div>
-
-              <div className="overflow-x-auto">
-                {(() => {
-                  const courts = Array.from(
-                    { length: sportCfg.courts },
-                    (_, i) => String(i + 1)
-                  );
-
-                  return (
-                    <table className="w-full text-sm border-collapse min-w-[640px]">
-                      <thead>
-                        {/* Row 1: dates */}
-                        <tr className="bg-gray-50">
-                          <th className="w-16 px-3 py-2 text-left text-xs text-gray-400 font-medium border-r border-gray-100 sticky left-0 bg-gray-50 z-10">
-                            เวลา
-                          </th>
-                          {dateRange.map((date) => (
-                            <th
-                              key={toDateKey(date)}
-                              colSpan={sportCfg.courts}
-                              className="px-2 py-2 text-center text-xs font-semibold text-gray-600 border-r border-gray-100 last:border-r-0"
-                              style={isSameDay(date, new Date()) ? { outline: `2px solid ${sportCfg.color}`, outlineOffset: "-2px" } : {}}
-                            >
-                              <span
-                                className={
-                                  isSameDay(date, new Date())
-                                    ? "font-bold text-gray-900"
-                                    : ""
-                                }
-                              >
-                                {date.toLocaleDateString("th-TH", {
-                                  weekday: "short",
-                                  day: "numeric",
-                                  month: "short",
-                                })}
-                              </span>
-                            </th>
-                          ))}
-                        </tr>
-                        {/* Row 2: court numbers */}
-                        <tr className="bg-gray-50 border-b-2 border-gray-200">
-                          <th className="sticky left-0 bg-gray-50 z-10 border-r border-gray-100" />
-                          {dateRange.map((date) =>
-                            courts.map((court, ci) => (
-                              <th
-                                key={`${toDateKey(date)}-c${court}`}
-                                className={`px-1 py-1.5 text-center text-[11px] font-medium text-gray-500 ${
-                                  ci === courts.length - 1
-                                    ? "border-r border-gray-100"
-                                    : ""
-                                }`}
-                              >
-                                สนาม {court}
-                              </th>
-                            ))
-                          )}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {TIME_SLOTS.map((time, ti) => (
-                          <tr
-                            key={time}
-                            className={
-                              ti % 2 === 0 ? "bg-white" : "bg-gray-50/30"
+                        <span className={`text-[10px] font-medium uppercase tracking-wide ${isSelected ? "text-white/80" : "text-gray-400"}`}>
+                          {date.toLocaleDateString("th-TH", { weekday: "short" })}
+                        </span>
+                        <span className={`text-base font-bold leading-tight ${isSelected ? "text-white" : isToday ? "" : "text-gray-700"}`}>
+                          {date.getDate()}
+                        </span>
+                        {count > 0 ? (
+                          <span
+                            className="text-[10px] font-bold mt-0.5 px-1.5 rounded-full"
+                            style={
+                              isSelected
+                                ? { backgroundColor: "rgba(255,255,255,0.25)", color: "#fff" }
+                                : { backgroundColor: sportCfg.lightColor, color: sportCfg.color }
                             }
                           >
-                            {/* Time label */}
-                            <td className="px-3 py-1.5 text-xs font-mono text-gray-400 border-r border-gray-100 whitespace-nowrap sticky left-0 bg-inherit z-10">
-                              {time}
-                            </td>
-
-                            {/* Cells */}
-                            {dateRange.map((date, di) =>
-                              courts.map((court, ci) => {
-                                const dk = toDateKey(date);
-                                const booking = bookingMap[dk]?.[court]?.[time];
-                                const isLastCourt = ci === courts.length - 1;
-                                const isPast =
-                                  date < new Date() &&
-                                  !isSameDay(date, new Date());
-
-                                if (booking) {
-                                  const cellBg =
-                                    booking.status === "confirmed"
-                                      ? { bg: "#dcfce7", text: "#15803d" }
-                                      : booking.status === "uploaded"
-                                      ? { bg: "#fef9c3", text: "#a16207" }
-                                      : { bg: "#f3f4f6", text: "#6b7280" };
-
-                                  return (
-                                    <td
-                                      key={`${dk}-${court}-${time}`}
-                                      className={`px-1 py-1 ${
-                                        isLastCourt
-                                          ? "border-r border-gray-100"
-                                          : ""
-                                      }`}
-                                    >
-                                      <div
-                                        className="rounded-lg px-1.5 py-1 leading-tight cursor-pointer hover:opacity-80 transition-opacity"
-                                        style={{
-                                          backgroundColor: cellBg.bg,
-                                          color: cellBg.text,
-                                        }}
-                                        title={`${booking.customerName} (${
-                                          booking.customerTel
-                                        }) — ${
-                                          STATUS_CONFIG[
-                                            booking.status as keyof typeof STATUS_CONFIG
-                                          ]?.label
-                                        }`}
-                                        onClick={() =>
-                                          booking.slipImageBase64 &&
-                                          setSelectedSlip(
-                                            booking.slipImageBase64
-                                          )
-                                        }
-                                      >
-                                        <div className="text-xs font-semibold truncate max-w-[80px]">
-                                          {booking.customerName?.split(
-                                            " "
-                                          )[0] || "จอง"}
-                                        </div>
-                                        <div className="text-[10px] opacity-70">
-                                          {
-                                            STATUS_CONFIG[
-                                              booking.status as keyof typeof STATUS_CONFIG
-                                            ]?.label
-                                          }
-                                        </div>
-                                      </div>
-                                    </td>
-                                  );
-                                }
-
-                                return (
-                                  <td
-                                    key={`${dk}-${court}-${time}`}
-                                    className={`px-1 py-1 ${
-                                      isLastCourt
-                                        ? "border-r border-gray-100"
-                                        : ""
-                                    }`}
-                                  >
-                                    <div
-                                      className={`h-9 rounded-lg border border-dashed flex items-center justify-center ${
-                                        isPast
-                                          ? "border-gray-100 bg-gray-50/50"
-                                          : "border-gray-200"
-                                      }`}
-                                    >
-                                      <span className="text-[10px] text-gray-300">
-                                        {isPast ? "—" : "ว่าง"}
-                                      </span>
-                                    </div>
-                                  </td>
-                                );
-                              })
-                            )}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  );
-                })()}
+                            {count}
+                          </span>
+                        ) : (
+                          <span className="h-4 mt-0.5" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+                <button
+                  onClick={() => setWeekStart((d) => addDays(d, 7))}
+                  className="w-8 h-8 rounded-lg bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-600 font-bold transition-colors flex-shrink-0"
+                >
+                  ›
+                </button>
               </div>
 
-              {/* Legend */}
-              <div className="px-5 py-3 border-t border-gray-100 flex flex-wrap gap-4 text-xs text-gray-500">
-                <span className="flex items-center gap-1.5">
-                  <span className="w-3 h-3 rounded bg-green-100 inline-block" />
-                  ยืนยันแล้ว
+              {/* Selected date label */}
+              <div className="text-center">
+                <span className="text-sm font-semibold text-gray-700">
+                  {selectedDate.toLocaleDateString("th-TH", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
                 </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="w-3 h-3 rounded bg-yellow-100 inline-block" />
-                  รอตรวจสอบสลิป
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="w-3 h-3 rounded bg-gray-100 inline-block" />
-                  รออัปโหลดสลิป
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="w-3 h-3 rounded border border-dashed border-gray-300 inline-block" />
-                  ว่าง
-                </span>
+                {isSameDay(selectedDate, new Date()) && (
+                  <span className="ml-2 px-2 py-0.5 text-xs font-bold rounded-full" style={{ backgroundColor: sportCfg.lightColor, color: sportCfg.color }}>
+                    วันนี้
+                  </span>
+                )}
               </div>
+            </div>
+
+            {/* ── Court cards side by side ── */}
+            <div className={`grid gap-4 ${sportCfg.courts <= 2 ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-4"}`}>
+              {courts.map((court) => {
+                const courtBookings = bookingMap[court] ?? {};
+                const bookedCount = Object.keys(courtBookings).length;
+                const waitingCount = Object.values(courtBookings).filter((b) => b.status === "uploaded").length;
+
+                return (
+                  <div key={court} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+                    {/* Court header */}
+                    <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between" style={{ backgroundColor: sportCfg.lightColor }}>
+                      <div className="flex items-center gap-2">
+                        <span className="text-lg">{sportCfg.emoji}</span>
+                        <span className="font-bold text-gray-800">สนาม {court}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 text-xs">
+                        {waitingCount > 0 && (
+                          <span className="px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded-full font-bold">
+                            {waitingCount} รอตรวจ
+                          </span>
+                        )}
+                        <span className="px-2 py-0.5 bg-white/80 text-gray-500 rounded-full font-medium">
+                          {bookedCount}/{TIME_SLOTS.length}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Time slots */}
+                    <div className="divide-y divide-gray-50">
+                      {TIME_SLOTS.map((time) => {
+                        const booking = courtBookings[time];
+                        const isPast =
+                          selectedDate < new Date() &&
+                          !isSameDay(selectedDate, new Date());
+
+                        if (booking) {
+                          const scfg = STATUS_CONFIG[booking.status as keyof typeof STATUS_CONFIG];
+                          return (
+                            <button
+                              key={time}
+                              className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 transition-colors text-left"
+                              onClick={() => setSelectedBooking(booking)}
+                            >
+                              <span className="text-xs font-mono text-gray-400 w-10 flex-shrink-0">{time}</span>
+                              <div
+                                className="flex-1 rounded-lg px-3 py-1.5 flex items-center justify-between gap-2"
+                                style={{ backgroundColor: scfg?.bg }}
+                              >
+                                <span className="text-sm font-semibold truncate" style={{ color: scfg?.color }}>
+                                  {booking.customerName || "จอง"}
+                                </span>
+                                <span
+                                  className="text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0"
+                                  style={{ backgroundColor: scfg?.dot + "33", color: scfg?.color }}
+                                >
+                                  {scfg?.short}
+                                </span>
+                              </div>
+                            </button>
+                          );
+                        }
+
+                        return (
+                          <div key={time} className={`flex items-center gap-3 px-4 py-2.5 ${isPast ? "opacity-30" : ""}`}>
+                            <span className="text-xs font-mono text-gray-300 w-10 flex-shrink-0">{time}</span>
+                            <div className="flex-1 border border-dashed border-gray-200 rounded-lg px-3 py-1.5 flex items-center">
+                              <span className="text-xs text-gray-300">{isPast ? "—" : "ว่าง"}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Legend */}
+            <div className="flex flex-wrap gap-4 text-xs text-gray-500 px-1">
+              {Object.entries(STATUS_CONFIG).filter(([k]) => k !== "cancelled").map(([, cfg]) => (
+                <span key={cfg.label} className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full inline-block" style={{ backgroundColor: cfg.dot }} />
+                  {cfg.label}
+                </span>
+              ))}
+              <span className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded border border-dashed border-gray-400 inline-block" />
+                ว่าง
+              </span>
             </div>
           </div>
         )}
       </div>
 
-      {/* ── Slip modal ── */}
-      {selectedSlip && (
-        <div
-          className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50"
-          onClick={() => setSelectedSlip(null)}
-        >
-          <div
-            className="bg-white p-4 rounded-2xl max-w-lg w-full text-center relative shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button
-              onClick={() => setSelectedSlip(null)}
-              className="absolute top-3 right-4 text-2xl font-bold text-gray-400 hover:text-gray-700"
-            >
-              ✕
-            </button>
-            <h3 className="text-lg font-bold mb-4 text-gray-800">
-              หลักฐานการโอนเงิน
-            </h3>
-            <img
-              src={selectedSlip}
-              alt="slip"
-              className="max-h-[70vh] mx-auto rounded-xl border border-gray-100"
-            />
-          </div>
-        </div>
+      {/* Booking detail modal */}
+      {selectedBooking && (
+        <BookingDetailModal
+          booking={selectedBooking}
+          sportCfg={SPORT_CONFIG[selectedBooking.sportType || "football"]}
+          onClose={() => setSelectedBooking(null)}
+          onConfirm={() => updateBookingStatus(selectedBooking.id, "confirmed")}
+          onCancel={() => updateBookingStatus(selectedBooking.id, "cancelled")}
+        />
       )}
     </div>
   );
