@@ -15,13 +15,15 @@ import { db } from "../../lib/firebase";
 
 interface Booking {
   id: string;
+  shortId?: string; 
   customerName?: string;
   customerTel?: string;
   sportType?: string;
   courtNumber?: string | number;
   startTime?: { toDate: () => Date };
-  status?: "pending" | "uploaded" | "confirmed" | "cancelled";
+  status?: "pending" | "uploaded" | "confirmed" | "completed" | "cancelled"; 
   slipImageBase64?: string;
+  expiresAt?: { toDate: () => Date }; 
   createdAt?: { toDate: () => Date };
 }
 
@@ -41,11 +43,13 @@ const TIME_SLOTS = [
   "15:00","16:00","17:00","18:00","19:00","20:00",
 ];
 
+// 🎯 เปลี่ยนชื่อ Label เป็นภาษาอังกฤษ และปรับสีให้ตรงกับฝั่ง User แบบ 100%
 const STATUS_CONFIG = {
-  pending:   { label: "รออัปโหลดสลิป", short: "รอสลิป",   color: "#6b7280", bg: "#f3f4f6", dot: "#9ca3af" },
-  uploaded:  { label: "รอตรวจสอบสลิป", short: "รอตรวจ",   color: "#92400e", bg: "#fef3c7", dot: "#f59e0b" },
-  confirmed: { label: "ยืนยันแล้ว",    short: "ยืนยัน",   color: "#14532d", bg: "#dcfce7", dot: "#22c55e" },
-  cancelled: { label: "ยกเลิกแล้ว",   short: "ยกเลิก",   color: "#7f1d1d", bg: "#fee2e2", dot: "#ef4444" },
+  pending:   { label: "Pending",   short: "Pending",   color: "#a16207", bg: "#fef9c3", dot: "#eab308" }, // สีเหลือง
+  uploaded:  { label: "Uploaded",  short: "Uploaded",  color: "#1d4ed8", bg: "#dbeafe", dot: "#3b82f6" }, // สีน้ำเงิน
+  confirmed: { label: "Confirmed", short: "Confirmed", color: "#15803d", bg: "#dcfce7", dot: "#22c55e" }, // สีเขียว
+  completed: { label: "Completed", short: "Completed", color: "#4b5563", bg: "#f3f4f6", dot: "#6b7280" }, // สีเทา
+  cancelled: { label: "Cancelled", short: "Cancelled", color: "#b91c1c", bg: "#fee2e2", dot: "#ef4444" }, // สีแดง
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -68,17 +72,15 @@ function addDays(d: Date, n: number) {
   return r;
 }
 
-// ─── StatusBadge ─────────────────────────────────────────────────────────────
-
 function StatusBadge({ status }: { status: string }) {
   const cfg = STATUS_CONFIG[status as keyof typeof STATUS_CONFIG];
   if (!cfg) return null;
   return (
     <span
-      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold"
-      style={{ backgroundColor: cfg.bg, color: cfg.color }}
+      className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold whitespace-nowrap border"
+      style={{ backgroundColor: cfg.bg, color: cfg.color, borderColor: `${cfg.dot}40` }}
     >
-      <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ backgroundColor: cfg.dot }} />
+      <span className="w-1.5 h-1.5 rounded-full inline-block flex-shrink-0" style={{ backgroundColor: cfg.dot }} />
       {cfg.label}
     </span>
   );
@@ -91,12 +93,14 @@ function BookingDetailModal({
   sportCfg,
   onClose,
   onConfirm,
+  onComplete,
   onCancel,
 }: {
   booking: Booking;
   sportCfg: typeof SPORT_CONFIG[string];
   onClose: () => void;
   onConfirm: () => void;
+  onComplete: () => void;
   onCancel: () => void;
 }) {
   const st = booking.startTime?.toDate();
@@ -110,10 +114,9 @@ function BookingDetailModal({
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden"
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-fade-in-up"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
         <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-xl">{sportCfg.emoji}</span>
@@ -121,11 +124,17 @@ function BookingDetailModal({
               {sportCfg.label} สนาม {booking.courtNumber}
             </span>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl font-bold">✕</button>
+          <div className="flex items-center gap-3">
+             {booking.shortId && (
+               <span className="bg-blue-50 text-blue-600 px-3 py-1 rounded-lg font-mono font-bold text-lg border border-blue-100">
+                 #{booking.shortId}
+               </span>
+             )}
+             <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl font-bold">✕</button>
+          </div>
         </div>
 
-        {/* Body */}
-        <div className="px-6 py-5 space-y-4">
+        <div className="px-6 py-5 space-y-4 max-h-[60vh] overflow-y-auto">
           <div className="flex items-start gap-3 p-3 bg-gray-50 rounded-xl">
             <span className="text-2xl">👤</span>
             <div>
@@ -150,28 +159,33 @@ function BookingDetailModal({
               <img
                 src={booking.slipImageBase64}
                 alt="slip"
-                className="w-full rounded-xl border border-gray-100 max-h-64 object-contain bg-gray-50"
+                className="w-full rounded-xl border border-gray-100 object-contain bg-gray-50"
               />
             </div>
           )}
         </div>
 
-        {/* Actions */}
-        <div className="px-6 pb-5 flex gap-3">
-          <button
-            onClick={onConfirm}
-            disabled={booking.status === "confirmed" || booking.status === "cancelled"}
-            className="flex-1 py-3 bg-green-500 hover:bg-green-600 disabled:bg-gray-200 disabled:text-gray-400 text-white font-bold rounded-xl transition-colors"
-          >
-            ✓ อนุมัติ
-          </button>
-          <button
-            onClick={onCancel}
-            disabled={booking.status === "cancelled"}
-            className="flex-1 py-3 bg-red-500 hover:bg-red-600 disabled:bg-gray-200 disabled:text-gray-400 text-white font-bold rounded-xl transition-colors"
-          >
-            ✕ ยกเลิก
-          </button>
+        <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex gap-3">
+          {booking.status === "uploaded" && (
+            <button onClick={onConfirm} className="flex-1 py-3 bg-green-500 hover:bg-green-600 text-white font-bold rounded-xl transition-colors shadow-sm">
+              ✓ อนุมัติสลิป
+            </button>
+          )}
+          {booking.status === "confirmed" && (
+            <button onClick={onComplete} className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-colors shadow-md">
+              🎯 เช็คอินเข้าสนาม
+            </button>
+          )}
+          {(booking.status === "pending" || booking.status === "uploaded" || booking.status === "confirmed") && (
+            <button onClick={onCancel} className="flex-1 py-3 bg-red-500 hover:bg-red-600 text-white font-bold rounded-xl transition-colors shadow-sm">
+              ✕ ยกเลิกคิว
+            </button>
+          )}
+          {(booking.status === "completed" || booking.status === "cancelled") && (
+             <button onClick={onClose} className="w-full py-3 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold rounded-xl transition-colors">
+               ปิดหน้าต่าง
+             </button>
+          )}
         </div>
       </div>
     </div>
@@ -189,7 +203,11 @@ export default function AdminPage() {
   const [isLoading, setIsLoading] = useState(false);
 
   const [view, setView] = useState<"list" | "calendar">("list");
-  const [selectedSport, setSelectedSport] = useState("football");
+  const [selectedSport, setSelectedSport] = useState<string>("all");
+  
+  // 🎯 State สำหรับสลับหน้า "คิวปัจจุบัน (active)" กับ "ประวัติย้อนหลัง (history)"
+  const [listTab, setListTab] = useState<"active" | "history">("active");
+  
   const [selectedDate, setSelectedDate] = useState(() => {
     const d = new Date();
     d.setHours(0, 0, 0, 0);
@@ -202,8 +220,23 @@ export default function AdminPage() {
   });
 
   const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null);
+  const [currentTime, setCurrentTime] = useState(new Date());
 
-  // ── Auth ──────────────────────────────────────────────────────────────────
+  const [searchQuery, setSearchQuery] = useState("");
+
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const formatCountdown = (expiresAt: Date | undefined) => {
+    if (!expiresAt) return null;
+    const diff = expiresAt.getTime() - currentTime.getTime();
+    if (diff <= 0) return null;
+    const m = Math.floor(diff / 60000).toString().padStart(2, '0');
+    const s = Math.floor((diff % 60000) / 1000).toString().padStart(2, '0');
+    return `${m}:${s}`;
+  };
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -215,8 +248,6 @@ export default function AdminPage() {
     }
   };
 
-  // ── Realtime listener ─────────────────────────────────────────────────────
-
   useEffect(() => {
     if (!isAuthenticated) return;
     setIsLoading(true);
@@ -224,7 +255,17 @@ export default function AdminPage() {
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
-        setBookings(snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Booking)));
+        const now = new Date();
+        const loadedBookings = snapshot.docs.map((d) => {
+          const b = { id: d.id, ...d.data() } as Booking;
+          if (b.status === "pending" && b.expiresAt && b.expiresAt.toDate() < now) {
+            b.status = "cancelled"; 
+            updateDoc(doc(db, "bookings", b.id), { status: "cancelled" }).catch(console.error); 
+          }
+          return b;
+        });
+
+        setBookings(loadedBookings);
         setIsLoading(false);
       },
       (err) => { console.error(err); setIsLoading(false); }
@@ -232,30 +273,58 @@ export default function AdminPage() {
     return () => unsubscribe();
   }, [isAuthenticated]);
 
-  // ── Update status ──────────────────────────────────────────────────────────
-
   const updateBookingStatus = async (bookingId: string, newStatus: string) => {
     const label = STATUS_CONFIG[newStatus as keyof typeof STATUS_CONFIG]?.label ?? newStatus;
     if (!confirm(`เปลี่ยนสถานะเป็น "${label}"?`)) return;
     try {
       await updateDoc(doc(db, "bookings", bookingId), { status: newStatus });
-      setSelectedBooking(null);
+      setSelectedBooking(null); 
     } catch {
       alert("เกิดข้อผิดพลาดในการอัปเดตสถานะ");
     }
   };
 
-  // ── Derived ────────────────────────────────────────────────────────────────
-
-  const sportCfg = SPORT_CONFIG[selectedSport];
-  const courts = Array.from({ length: sportCfg.courts }, (_, i) => String(i + 1));
+  const sportCfg = SPORT_CONFIG[selectedSport]; 
+  const courts = sportCfg ? Array.from({ length: sportCfg.courts }, (_, i) => String(i + 1)) : [];
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
   const dk = toDateKey(selectedDate);
 
-  // bookingMap[court][time] = Booking  (filtered to selectedDate + selectedSport)
+  // 🎯 ฟิลเตอร์ข้อมูลครอบจักรวาล (กรองทั้งกีฬา, แท็บ Active/History, และคำค้นหา)
+  const filteredBookings = bookings.filter((b) => {
+    // 1. ถ้ามีการค้นหารหัส ให้ดึงออกมาโชว์เลยโดยไม่ต้องสนว่าอยู่แท็บไหน
+    if (searchQuery.trim() !== "") {
+      return b.shortId?.toLowerCase().includes(searchQuery.toLowerCase().trim());
+    }
+    
+    // 2. กรองตามประเภทกีฬา
+    if (selectedSport !== "all" && b.sportType !== selectedSport) return false;
+
+    // 3. กรองตามแท็บ (Active vs History)
+    const isActiveStatus = ["pending", "uploaded", "confirmed"].includes(b.status || "");
+    if (listTab === "active" && !isActiveStatus) return false;
+    if (listTab === "history" && isActiveStatus) return false;
+
+    return true;
+  });
+
+  // 🎯 เรียงลำดับข้อมูล
+  filteredBookings.sort((a, b) => {
+    if (listTab === "active") {
+      // หน้า Active: เรียงเวลาที่ใกล้ถึงที่สุดขึ้นก่อน (Ascending)
+      const timeA = a.startTime?.toDate().getTime() || Infinity;
+      const timeB = b.startTime?.toDate().getTime() || Infinity;
+      return timeA - timeB; 
+    } else {
+      // หน้า History: เรียงรายการที่ทำล่าสุดขึ้นก่อน (Descending)
+      const timeA = a.createdAt?.toDate().getTime() || 0;
+      const timeB = b.createdAt?.toDate().getTime() || 0;
+      return timeB - timeA; 
+    }
+  });
+
   const bookingMap: Record<string, Record<string, Booking>> = {};
   bookings.forEach((b) => {
-    if (b.sportType !== selectedSport) return;
+    if (selectedSport === "all" || b.sportType !== selectedSport) return;
     if (!b.startTime || b.status === "cancelled") return;
     const d = b.startTime.toDate();
     if (!isSameDay(d, selectedDate)) return;
@@ -265,15 +334,12 @@ export default function AdminPage() {
     bookingMap[court][time] = b;
   });
 
-  // Count bookings per day for dots
   const bookingsByDay: Record<string, number> = {};
   bookings.forEach((b) => {
-    if (b.sportType !== selectedSport || !b.startTime || b.status === "cancelled") return;
+    if (selectedSport === "all" || b.sportType !== selectedSport || !b.startTime || b.status === "cancelled") return;
     const key = toDateKey(b.startTime.toDate());
     bookingsByDay[key] = (bookingsByDay[key] ?? 0) + 1;
   });
-
-  // ── Login ──────────────────────────────────────────────────────────────────
 
   if (!isAuthenticated) {
     return (
@@ -301,14 +367,10 @@ export default function AdminPage() {
     );
   }
 
-  // ── Dashboard ─────────────────────────────────────────────────────────────
-
   return (
     <div className="min-h-screen bg-gray-50">
-
-      {/* Top bar */}
-      <div className="bg-white border-b border-gray-200 px-6 py-4 sticky top-0 z-20">
-        <div className="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-3">
+      <div className="bg-white border-b border-gray-200 px-6 py-4 sticky top-0 z-20 shadow-sm">
+        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <span className="text-xl font-bold text-gray-800">Staff Dashboard</span>
             <span className="flex items-center gap-1.5 px-2.5 py-0.5 bg-green-100 text-green-700 rounded-full text-xs font-semibold">
@@ -333,105 +395,203 @@ export default function AdminPage() {
         </div>
       </div>
 
-      <div className="max-w-6xl mx-auto px-4 py-6 space-y-5">
-
-        {/* Sport selector */}
-        <div className="flex flex-wrap gap-3">
-          {Object.entries(SPORT_CONFIG).map(([key, cfg]) => {
-            const total = bookings.filter((b) => b.sportType === key && b.status !== "cancelled").length;
-            const waiting = bookings.filter((b) => b.sportType === key && b.status === "uploaded").length;
-            const isActive = selectedSport === key;
-            return (
-              <button
-                key={key}
-                onClick={() => setSelectedSport(key)}
-                className={`flex items-center gap-3 px-5 py-3 rounded-2xl border-2 font-semibold transition-all ${
-                  isActive ? "text-white shadow-md scale-[1.02] border-transparent" : "bg-white border-gray-200 text-gray-600 hover:border-gray-300"
-                }`}
-                style={isActive ? { backgroundColor: cfg.color } : {}}
-              >
-                <span className="text-2xl leading-none">{cfg.emoji}</span>
-                <div className="text-left leading-tight">
-                  <div className="text-sm">{cfg.label}</div>
-                  <div className={`text-xs mt-0.5 ${isActive ? "text-white/75" : "text-gray-400"}`}>
-                    {total} การจอง
-                    {waiting > 0 && (
-                      <span className={`ml-1.5 px-1.5 py-0.5 rounded-full text-xs font-bold ${isActive ? "bg-white/25 text-white" : "bg-yellow-100 text-yellow-700"}`}>
-                        {waiting} รอตรวจ
-                      </span>
-                    )}
+      <div className="max-w-7xl mx-auto px-4 py-6 space-y-5">
+        
+        <div className="flex flex-col md:flex-row justify-between gap-4">
+          
+          {/* ปุ่มเลือกประเภทกีฬา */}
+          <div className="flex flex-wrap gap-3">
+            {Object.entries(SPORT_CONFIG).map(([key, cfg]) => {
+              const total = bookings.filter((b) => b.sportType === key && b.status !== "cancelled").length;
+              const waiting = bookings.filter((b) => b.sportType === key && b.status === "uploaded").length;
+              const isActive = selectedSport === key && searchQuery === ""; 
+              
+              return (
+                <button
+                  key={key}
+                  onClick={() => {
+                    if (selectedSport === key) {
+                      setSelectedSport("all");
+                    } else {
+                      setSelectedSport(key);
+                    }
+                    setSearchQuery("");
+                  }}
+                  className={`flex items-center gap-3 px-5 py-3 rounded-2xl border-2 font-semibold transition-all ${
+                    isActive ? "text-white shadow-md scale-[1.02] border-transparent" : "bg-white border-gray-200 text-gray-600 hover:border-gray-300"
+                  }`}
+                  style={isActive ? { backgroundColor: cfg.color } : {}}
+                >
+                  <span className="text-2xl leading-none">{cfg.emoji}</span>
+                  <div className="text-left leading-tight">
+                    <div className="text-sm">{cfg.label}</div>
+                    <div className={`text-xs mt-0.5 ${isActive ? "text-white/75" : "text-gray-400"}`}>
+                      {total} การจอง
+                      {waiting > 0 && (
+                        <span className={`ml-1.5 px-1.5 py-0.5 rounded-full text-xs font-bold ${isActive ? "bg-white/25 text-white" : "bg-yellow-100 text-yellow-700"}`}>
+                          {waiting} รอตรวจ
+                        </span>
+                      )}
+                    </div>
                   </div>
-                </div>
-              </button>
-            );
-          })}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* 🎯 โซนช่องค้นหา และ ปุ่มสลับหน้า Active/History */}
+          <div className="flex flex-col gap-3 w-full md:w-auto">
+            
+            {/* ช่องค้นหา */}
+            <div className="relative w-full md:w-[340px]">
+              <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                <span className="text-gray-400 text-lg">🔍</span>
+              </div>
+              <input
+                type="text"
+                placeholder="ค้นหารหัสอ้างอิง..."
+                value={searchQuery}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  if (e.target.value.trim() !== "" && view !== "list") {
+                    setView("list"); 
+                  }
+                }}
+                className="w-full pl-12 pr-4 py-3 h-full border-2 border-gray-200 rounded-2xl focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/20 transition-all font-semibold text-gray-700 placeholder-gray-400"
+              />
+              {searchQuery && (
+                <button 
+                  onClick={() => setSearchQuery("")}
+                  className="absolute inset-y-0 right-0 pr-4 flex items-center text-gray-400 hover:text-gray-600 font-bold"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+
+            {/* 🎯 ปุ่ม Toggle สลับหน้าคิวปัจจุบัน / ประวัติ (โชว์เฉพาะหน้า List) */}
+            {view === "list" && !searchQuery && (
+              <div className="flex bg-gray-200/70 p-1.5 rounded-xl">
+                <button 
+                  onClick={() => setListTab("active")} 
+                  className={`flex-1 py-1.5 px-3 text-sm font-bold rounded-lg transition-all ${listTab === "active" ? "bg-white text-blue-600 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
+                >
+                  🟢 คิวใช้งาน
+                </button>
+                <button 
+                  onClick={() => setListTab("history")} 
+                  className={`flex-1 py-1.5 px-3 text-sm font-bold rounded-lg transition-all ${listTab === "history" ? "bg-white text-gray-800 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
+                >
+                  📁 ประวัติย้อนหลัง
+                </button>
+              </div>
+            )}
+
+          </div>
+
         </div>
 
         {/* ═══════════════════════════ LIST VIEW ═══════════════════════════ */}
         {view === "list" && (
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+            
+            {/* 🎯 ป้ายแจ้งเตือนเล็กๆ ว่าตอนนี้อยู่หน้าประวัติย้อนหลัง */}
+            {listTab === "history" && !searchQuery && (
+              <div className="bg-gray-100 px-5 py-2.5 border-b border-gray-200 text-sm text-gray-600 font-semibold flex items-center gap-2">
+                <span>📁</span> กำลังแสดงผลข้อมูล <strong>"ประวัติย้อนหลัง"</strong> (รายการที่เสร็จสิ้นและยกเลิกแล้ว)
+              </div>
+            )}
+
             {isLoading ? (
-              <p className="text-center py-16 text-gray-400">กำลังโหลด...</p>
+              <p className="text-center py-16 text-gray-400">กำลังโหลดข้อมูล...</p>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-left">
+                <table className="w-full text-left whitespace-nowrap">
                   <thead>
                     <tr className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wide border-b border-gray-100">
-                      <th className="px-5 py-3 font-semibold">ลูกค้า</th>
-                      <th className="px-5 py-3 font-semibold">สนาม / เวลา</th>
-                      <th className="px-5 py-3 font-semibold">สถานะ</th>
-                      <th className="px-5 py-3 font-semibold">สลิป</th>
-                      <th className="px-5 py-3 font-semibold">การจัดการ</th>
+                      <th className="px-5 py-4 font-semibold w-[20%]">ลูกค้า</th>
+                      <th className="px-5 py-4 font-semibold w-[15%]">ทำรายการเมื่อ</th>
+                      <th className="px-5 py-4 font-semibold w-[20%]">สนาม / เวลา</th>
+                      <th className="px-5 py-4 font-semibold w-[15%]">สถานะ</th>
+                      <th className="px-5 py-4 font-semibold w-[10%]">สลิป</th>
+                      <th className="px-5 py-4 font-semibold text-center w-[10%]">รหัสอ้างอิง</th>
+                      <th className="px-5 py-4 font-semibold text-right w-[10%]">การจัดการ</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
-                    {bookings
-                      .filter((b) => b.sportType === selectedSport)
-                      .map((booking) => {
+                    {filteredBookings.map((booking) => {
                         const st = booking.startTime?.toDate();
                         const timeStr = st
                           ? `${st.toLocaleDateString("th-TH", { day: "numeric", month: "short" })} เวลา ${st.getHours().toString().padStart(2, "0")}:00`
                           : "ไม่ระบุ";
+                          
+                        const ct = booking.createdAt?.toDate();
+                        const createdAtStr = ct ? (
+                          <>
+                            <span className="block text-gray-800 font-semibold text-sm">{ct.toLocaleDateString("th-TH", { day: "numeric", month: "short", year: "2-digit" })}</span>
+                            <span className="text-xs text-gray-500">{ct.getHours().toString().padStart(2, "0")}:{ct.getMinutes().toString().padStart(2, "0")} น.</span>
+                          </>
+                        ) : "—";
+                        
+                        const curSportCfg = SPORT_CONFIG[booking.sportType as keyof typeof SPORT_CONFIG] || SPORT_CONFIG.football;
+
                         return (
                           <tr key={booking.id} className="hover:bg-gray-50/70 transition-colors">
                             <td className="px-5 py-4">
-                              <p className="font-semibold text-gray-800">{booking.customerName || "ไม่ระบุ"}</p>
-                              <p className="text-xs text-gray-400">{booking.customerTel || "—"}</p>
+                              <p className="font-semibold text-gray-800 text-base">{booking.customerName || "ไม่ระบุ"}</p>
+                              <p className="text-sm text-gray-400 font-mono mt-0.5">{booking.customerTel || "—"}</p>
                             </td>
                             <td className="px-5 py-4">
-                              <span className="inline-flex items-center gap-1 text-sm font-semibold" style={{ color: sportCfg.color }}>
-                                {sportCfg.emoji} {sportCfg.label} สนาม {booking.courtNumber}
+                              {createdAtStr}
+                            </td>
+                            <td className="px-5 py-4">
+                              <span className="inline-flex items-center gap-1.5 text-sm font-bold bg-gray-50 px-2.5 py-1 rounded-md border border-gray-100" style={{ color: curSportCfg.color }}>
+                                {curSportCfg.emoji} {curSportCfg.label} สนาม {booking.courtNumber}
                               </span>
-                              <p className="text-xs text-gray-400 mt-0.5">{timeStr}</p>
+                              <p className="text-xs text-gray-500 mt-1.5 ml-1">{timeStr}</p>
                             </td>
                             <td className="px-5 py-4">
-                              <StatusBadge status={booking.status || ""} />
+                              <div className="flex flex-col items-start gap-1">
+                                <StatusBadge status={booking.status || ""} />
+                                {booking.status === "pending" && (() => {
+                                  const timer = formatCountdown(booking.expiresAt?.toDate());
+                                  return timer ? <span className="text-gray-500 text-xs font-bold pl-1">⏳ {timer}</span> : null;
+                                })()}
+                              </div>
                             </td>
                             <td className="px-5 py-4">
                               {booking.slipImageBase64 ? (
-                                <button onClick={() => setSelectedBooking(booking)} className="text-blue-500 hover:underline text-sm font-medium">
+                                <button onClick={() => setSelectedBooking(booking)} className="text-blue-600 hover:text-blue-800 bg-blue-50 px-3 py-1 rounded-md text-sm font-semibold transition-colors">
                                   ดูสลิป
                                 </button>
                               ) : (
                                 <span className="text-gray-300 text-sm">—</span>
                               )}
                             </td>
-                            <td className="px-5 py-4">
-                              <div className="flex gap-2">
-                                <button
-                                  onClick={() => updateBookingStatus(booking.id, "confirmed")}
-                                  disabled={booking.status === "confirmed" || booking.status === "cancelled"}
-                                  className="px-3 py-1.5 bg-green-500 hover:bg-green-600 disabled:bg-gray-200 disabled:text-gray-400 text-white rounded-lg text-xs font-semibold transition-colors"
-                                >
-                                  อนุมัติ
-                                </button>
-                                <button
-                                  onClick={() => updateBookingStatus(booking.id, "cancelled")}
-                                  disabled={booking.status === "cancelled"}
-                                  className="px-3 py-1.5 bg-red-500 hover:bg-red-600 disabled:bg-gray-200 disabled:text-gray-400 text-white rounded-lg text-xs font-semibold transition-colors"
-                                >
-                                  ยกเลิก
-                                </button>
+                            <td className="px-5 py-4 text-center">
+                              <span className={`font-black text-xl tracking-wide px-3 py-1 rounded-lg border shadow-sm inline-block ${searchQuery && booking.shortId?.toLowerCase().includes(searchQuery.toLowerCase()) ? "bg-yellow-200 text-yellow-800 border-yellow-300" : "text-blue-600 bg-blue-50/50 border-blue-100"}`}>
+                                {booking.shortId ? `#${booking.shortId}` : "—"}
+                              </span>
+                            </td>
+                            <td className="px-5 py-4 text-right">
+                              <div className="flex justify-end gap-2">
+                                {booking.status === "uploaded" && (
+                                  <>
+                                    <button onClick={() => updateBookingStatus(booking.id, "confirmed")} className="px-3 py-1.5 bg-green-500 hover:bg-green-600 text-white rounded-lg text-xs font-semibold shadow-sm transition-colors">อนุมัติ</button>
+                                    <button onClick={() => updateBookingStatus(booking.id, "cancelled")} className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white rounded-lg text-xs font-semibold shadow-sm transition-colors">ยกเลิก</button>
+                                  </>
+                                )}
+                                {booking.status === "confirmed" && (
+                                  <button onClick={() => updateBookingStatus(booking.id, "completed")} className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-md transition-colors flex items-center gap-1">
+                                    เช็คอิน 🎫
+                                  </button>
+                                )}
+                                {booking.status === "pending" && (
+                                   <button onClick={() => updateBookingStatus(booking.id, "cancelled")} className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white rounded-lg text-xs font-semibold shadow-sm transition-colors">ยกเลิก</button>
+                                )}
+                                {(booking.status === "completed" || booking.status === "cancelled") && (
+                                   <span className="text-gray-300 text-sm font-semibold px-2">—</span>
+                                )}
                               </div>
                             </td>
                           </tr>
@@ -439,8 +599,12 @@ export default function AdminPage() {
                       })}
                   </tbody>
                 </table>
-                {bookings.filter((b) => b.sportType === selectedSport).length === 0 && (
-                  <p className="text-center py-14 text-gray-400">ไม่มีการจองสำหรับ{sportCfg.label}</p>
+                {filteredBookings.length === 0 && (
+                  <p className="text-center py-14 text-gray-400">
+                    {searchQuery 
+                      ? `ไม่พบข้อมูลรหัสอ้างอิง "${searchQuery}"` 
+                      : (selectedSport === "all" ? `ยังไม่มีข้อมูลในโหมด ${listTab === "active" ? "คิวใช้งาน" : "ประวัติย้อนหลัง"}` : `ไม่มีการจองสำหรับ${sportCfg?.label}`)}
+                  </p>
                 )}
               </div>
             )}
@@ -448,10 +612,18 @@ export default function AdminPage() {
         )}
 
         {/* ════════════════════════ CALENDAR VIEW ═════════════════════════ */}
-        {view === "calendar" && (
-          <div className="space-y-4">
+        {view === "calendar" && selectedSport === "all" && (
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-16 text-center flex flex-col items-center justify-center animate-fade-in-up">
+            <span className="text-6xl mb-4 opacity-80">📅</span>
+            <h3 className="text-2xl font-bold text-gray-800 mb-2">โปรดเลือกประเภทกีฬา</h3>
+            <p className="text-gray-500 max-w-md">
+              ระบบตารางสนามจำเป็นต้องแยกดูตามประเภทกีฬา กรุณาคลิกเลือก <strong className="text-green-600">ฟุตบอล</strong>, <strong className="text-blue-600">แบดมินตัน</strong> หรือ <strong className="text-orange-600">บาสเก็ตบอล</strong> ที่เมนูด้านบนก่อนครับ
+            </p>
+          </div>
+        )}
 
-            {/* ── Week date picker ── */}
+        {view === "calendar" && selectedSport !== "all" && sportCfg && (
+          <div className="space-y-4">
             <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
               <div className="flex items-center gap-2 mb-3">
                 <button
@@ -510,7 +682,6 @@ export default function AdminPage() {
                 </button>
               </div>
 
-              {/* Selected date label */}
               <div className="text-center">
                 <span className="text-sm font-semibold text-gray-700">
                   {selectedDate.toLocaleDateString("th-TH", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
@@ -523,7 +694,6 @@ export default function AdminPage() {
               </div>
             </div>
 
-            {/* ── Court cards side by side ── */}
             <div className={`grid gap-4 ${sportCfg.courts <= 2 ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-4"}`}>
               {courts.map((court) => {
                 const courtBookings = bookingMap[court] ?? {};
@@ -532,7 +702,6 @@ export default function AdminPage() {
 
                 return (
                   <div key={court} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-                    {/* Court header */}
                     <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between" style={{ backgroundColor: sportCfg.lightColor }}>
                       <div className="flex items-center gap-2">
                         <span className="text-lg">{sportCfg.emoji}</span>
@@ -550,7 +719,6 @@ export default function AdminPage() {
                       </div>
                     </div>
 
-                    {/* Time slots */}
                     <div className="divide-y divide-gray-50">
                       {TIME_SLOTS.map((time) => {
                         const booking = courtBookings[time];
@@ -568,7 +736,7 @@ export default function AdminPage() {
                             >
                               <span className="text-xs font-mono text-gray-400 w-10 flex-shrink-0">{time}</span>
                               <div
-                                className="flex-1 rounded-lg px-3 py-1.5 flex items-center justify-between gap-2"
+                                className="flex-1 rounded-lg px-3 py-1.5 flex items-center justify-between gap-2 border border-transparent shadow-sm"
                                 style={{ backgroundColor: scfg?.bg }}
                               >
                                 <span className="text-sm font-semibold truncate" style={{ color: scfg?.color }}>
@@ -600,8 +768,7 @@ export default function AdminPage() {
               })}
             </div>
 
-            {/* Legend */}
-            <div className="flex flex-wrap gap-4 text-xs text-gray-500 px-1">
+            <div className="flex flex-wrap gap-4 text-xs text-gray-500 px-1 mt-4">
               {Object.entries(STATUS_CONFIG).filter(([k]) => k !== "cancelled").map(([, cfg]) => (
                 <span key={cfg.label} className="flex items-center gap-1.5">
                   <span className="w-2.5 h-2.5 rounded-full inline-block" style={{ backgroundColor: cfg.dot }} />
@@ -617,13 +784,13 @@ export default function AdminPage() {
         )}
       </div>
 
-      {/* Booking detail modal */}
-      {selectedBooking && (
+      {selectedBooking && sportCfg && (
         <BookingDetailModal
           booking={selectedBooking}
-          sportCfg={SPORT_CONFIG[selectedBooking.sportType || "football"]}
+          sportCfg={sportCfg}
           onClose={() => setSelectedBooking(null)}
           onConfirm={() => updateBookingStatus(selectedBooking.id, "confirmed")}
+          onComplete={() => updateBookingStatus(selectedBooking.id, "completed")}
           onCancel={() => updateBookingStatus(selectedBooking.id, "cancelled")}
         />
       )}

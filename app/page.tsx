@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { collection, doc, runTransaction, query, where, getDocs, updateDoc } from "firebase/firestore";
+import { collection, doc, runTransaction, query, where, getDocs, updateDoc, onSnapshot } from "firebase/firestore";
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, User } from "firebase/auth";
 import { db, auth } from "../lib/firebase";
 
@@ -30,11 +30,13 @@ export default function BookingPage() {
 
   const [showForm, setShowForm] = useState(false);
   const [formData, setFormData] = useState({ name: "", tel: "", sport: "", courtNumber: "1", date: "", time: "" });
-  const [bookedSlots, setBookedSlots] = useState<string[]>([]);
+  
+  const [activeBookings, setActiveBookings] = useState<any[]>([]); 
   const [isSubmitting, setIsSubmitting] = useState(false);
   
   const [currentBookingId, setCurrentBookingId] = useState<string | null>(null);
   const [currentShortId, setCurrentShortId] = useState<string | null>(null);
+  const [currentExpiresAt, setCurrentExpiresAt] = useState<Date | null>(null); 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
   const [showHistory, setShowHistory] = useState(false);
@@ -45,6 +47,22 @@ export default function BookingPage() {
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
 
+  const [currentTime, setCurrentTime] = useState(new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const formatCountdown = (expiresAt: Date | undefined) => {
+    if (!expiresAt) return null;
+    const diff = expiresAt.getTime() - currentTime.getTime();
+    if (diff <= 0) return null;
+    const m = Math.floor(diff / 60000).toString().padStart(2, '0');
+    const s = Math.floor((diff % 60000) / 1000).toString().padStart(2, '0');
+    return `${m}:${s}`;
+  };
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
@@ -52,29 +70,41 @@ export default function BookingPage() {
     return () => unsubscribe();
   }, []);
 
+  // 🎯 อัปเดตหน้าประวัติการจอง (My Sessions) ให้เป็น Real-time ด้วย onSnapshot
   useEffect(() => {
     if (showHistory && user) {
-      const fetchHistory = async () => {
-        setIsLoadingHistory(true);
-        try {
-          const q = query(collection(db, "bookings"), where("userId", "==", user.uid));
-          const snapshot = await getDocs(q);
-          const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-          
-          data.sort((a: any, b: any) => {
-            const timeA = a.createdAt?.toDate().getTime() || 0;
-            const timeB = b.createdAt?.toDate().getTime() || 0;
-            return timeB - timeA;
-          });
+      setIsLoadingHistory(true);
+      
+      const q = query(collection(db, "bookings"), where("userId", "==", user.uid));
+      
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        const now = new Date();
+        
+        const data = snapshot.docs.map(docSnap => {
+          const b = { id: docSnap.id, ...docSnap.data() } as any;
+          if (b.status === "pending" && b.expiresAt && b.expiresAt.toDate() < now) {
+            b.status = "cancelled"; 
+            updateDoc(docSnap.ref, { status: "cancelled" }).catch(console.error); 
+          }
+          return b;
+        });
+        
+        // เรียงลำดับจากรายการใหม่สุดไปเก่าสุด
+        data.sort((a: any, b: any) => {
+          const timeA = a.createdAt?.toDate().getTime() || 0;
+          const timeB = b.createdAt?.toDate().getTime() || 0;
+          return timeB - timeA;
+        });
 
-          setUserBookings(data);
-        } catch (error) {
-          console.error("Error fetching history:", error);
-        } finally {
-          setIsLoadingHistory(false);
-        }
-      };
-      fetchHistory();
+        setUserBookings(data);
+        setIsLoadingHistory(false);
+      }, (error) => {
+        console.error("Error fetching history:", error);
+        setIsLoadingHistory(false);
+      });
+
+      // คืนค่าฟังก์ชันยกเลิกการติดตามเมื่อปิดหน้าต่างหรือเปลี่ยนยูสเซอร์
+      return () => unsubscribe();
     }
   }, [showHistory, user]);
 
@@ -102,17 +132,6 @@ export default function BookingPage() {
     }
   };
 
-  const handleLogout = () => {
-    signOut(auth);
-    setShowForm(false);
-    setShowHistory(false);
-  };
-
-  const handleBookNowClick = () => {
-    if (user) setShowForm(true);
-    else setShowLoginPopup(true);
-  };
-
   const getUserName = () => user?.email?.split('@')[0] || "User";
 
   const dateOptions = Array.from({ length: 7 }).map((_, i) => {
@@ -121,6 +140,29 @@ export default function BookingPage() {
     return d.toISOString().split("T")[0];
   });
 
+  const resetFormData = () => {
+    setFormData({
+      name: "",
+      tel: "",
+      sport: "",
+      courtNumber: "1",
+      date: dateOptions[0], 
+      time: ""
+    });
+  };
+
+  const handleLogout = () => {
+    signOut(auth);
+    setShowForm(false);
+    setShowHistory(false);
+    resetFormData(); 
+  };
+
+  const handleBookNowClick = () => {
+    if (user) setShowForm(true);
+    else setShowLoginPopup(true);
+  };
+
   useEffect(() => {
     setFormData((prev) => ({ ...prev, date: dateOptions[0] }));
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -128,38 +170,38 @@ export default function BookingPage() {
 
   useEffect(() => {
     if (!formData.date || !formData.sport || !formData.courtNumber) {
-        setBookedSlots([]); 
+        setActiveBookings([]); 
         return;
     }
 
-    const fetchBookings = async () => {
-      const startOfDay = new Date(`${formData.date}T00:00:00`);
-      const endOfDay = new Date(`${formData.date}T23:59:59`);
-      const q = query(
-        collection(db, "bookings"),
-        where("sportType", "==", formData.sport),
-        where("courtNumber", "==", formData.courtNumber),
-        where("status", "in", ["pending", "uploaded", "confirmed"])
-      );
+    const q = query(
+      collection(db, "bookings"),
+      where("sportType", "==", formData.sport),
+      where("courtNumber", "==", formData.courtNumber),
+      where("status", "in", ["pending", "uploaded", "confirmed", "completed"]) 
+    );
 
-      const snapshot = await getDocs(q);
-      const booked: string[] = [];
-      const now = new Date();
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map((docSnap) => docSnap.data());
+      setActiveBookings(data);
+    });
 
-      snapshot.forEach((docSnap) => {
-        const data = docSnap.data();
-        const startTime = data.startTime.toDate();
-        const isExpired = data.status === "pending" && data.expiresAt.toDate() < now;
-
-        if (!isExpired && startTime >= startOfDay && startTime <= endOfDay) {
-          const hour = startTime.getHours().toString().padStart(2, "0") + ":00";
-          booked.push(hour);
-        }
-      });
-      setBookedSlots(booked);
-    };
-    fetchBookings();
+    return () => unsubscribe();
   }, [formData.date, formData.sport, formData.courtNumber]);
+
+  const startOfDay = new Date(`${formData.date}T00:00:00`);
+  const endOfDay = new Date(`${formData.date}T23:59:59`);
+
+  const bookedSlots = activeBookings.reduce((acc, data) => {
+    const startTime = data.startTime?.toDate();
+    if (!startTime) return acc;
+    const isExpired = data.status === "pending" && data.expiresAt && data.expiresAt.toDate() < currentTime;
+
+    if (!isExpired && startTime >= startOfDay && startTime <= endOfDay) {
+      acc.push(startTime.getHours().toString().padStart(2, "0") + ":00");
+    }
+    return acc;
+  }, [] as string[]);
 
   const handleBookingSubmit = async () => {
     if (!formData.name || !formData.tel || !formData.time || !formData.sport) {
@@ -206,7 +248,7 @@ export default function BookingPage() {
           collection(db, "bookings"),
           where("sportType", "==", formData.sport),
           where("courtNumber", "==", formData.courtNumber),
-          where("status", "in", ["pending", "uploaded", "confirmed"])
+          where("status", "in", ["pending", "uploaded", "confirmed", "completed"]) 
         );
         const querySnapshot = await getDocs(q);
 
@@ -214,7 +256,7 @@ export default function BookingPage() {
         querySnapshot.forEach((docSnap) => {
           const data = docSnap.data();
           const existingStart = data.startTime.toDate();
-          const isExpired = data.status === "pending" && data.expiresAt.toDate() < now;
+          const isExpired = data.status === "pending" && data.expiresAt && data.expiresAt.toDate() < now;
           if (!isExpired && existingStart.getTime() === startDateTime.getTime()) isConflict = true; 
         });
 
@@ -237,10 +279,15 @@ export default function BookingPage() {
 
       setCurrentBookingId(newBookingRef.id);
       setCurrentShortId(newShortId); 
+      setCurrentExpiresAt(expiresAt); 
+      
+      setShowForm(false);
+      resetFormData();
       
       setTimeout(() => {
           setCurrentBookingId((prev) => prev === newBookingRef.id ? null : prev);
           setCurrentShortId((prev) => prev === newShortId ? null : prev);
+          setCurrentExpiresAt(null);
       }, 15 * 60000);
       
     } catch (error: any) {
@@ -297,9 +344,8 @@ export default function BookingPage() {
             alert("อัปโหลดสลิปสำเร็จ! รอพนักงานตรวจสอบ");
             setCurrentBookingId(null); 
             setCurrentShortId(null);
+            setCurrentExpiresAt(null);
             setSelectedFile(null);
-            setShowForm(false); 
-            setFormData({ ...formData, time: "" });
             setShowHistory(true); 
           })
           .catch(() => alert("เกิดข้อผิดพลาดในการอัปโหลดไฟล์"))
@@ -322,6 +368,7 @@ export default function BookingPage() {
       alert("ยกเลิกการจองเรียบร้อยแล้ว คิวนี้เปิดว่างให้ท่านอื่นจองได้แล้วครับ");
       setCurrentBookingId(null);
       setCurrentShortId(null);
+      setCurrentExpiresAt(null);
       setSelectedFile(null);
       setShowCancelConfirm(false);
     } catch (error) {
@@ -335,7 +382,6 @@ export default function BookingPage() {
   return (
     <div className="relative min-h-screen bg-gray-900 flex items-center">
       
-      {/* --- ส่วน Navigation ด้านขวาบน --- */}
       <div className="absolute top-6 right-6 lg:right-12 z-20">
         {user ? (
           <div className="flex items-center gap-4 bg-black/40 backdrop-blur-md px-5 py-2.5 rounded-full border border-white/10 shadow-lg">
@@ -393,7 +439,6 @@ export default function BookingPage() {
         </div>
       </div>
 
-      {/* --- 1. Popup Login --- */}
       {showLoginPopup && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-md p-4">
           <div className="bg-white rounded-2xl p-8 max-w-sm w-full relative shadow-2xl animate-fade-in-up">
@@ -423,13 +468,12 @@ export default function BookingPage() {
         </div>
       )}
 
-      {/* --- 2. Popup Form จองสนาม --- */}
       {showForm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-md p-4">
           <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-2xl relative overflow-y-auto max-h-[90vh] animate-fade-in-up">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-3xl font-bold text-gray-800">Create Your Booking</h2>
-              <button onClick={() => setShowForm(false)} className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-full border border-gray-200 text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors">✕</button>
+              <button onClick={() => { setShowForm(false); resetFormData(); }} className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-full border border-gray-200 text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors">✕</button>
             </div>
 
             <div className="space-y-4">
@@ -533,7 +577,11 @@ export default function BookingPage() {
               </div>
 
               <div className="pt-6">
-                <button onClick={handleBookingSubmit} disabled={isSubmitting || !formData.time || !formData.sport} className={`w-full py-4 rounded-xl text-xl font-bold transition-all ${(!formData.time || !formData.sport || isSubmitting) ? "bg-gray-400 text-white cursor-not-allowed" : "bg-green-600 hover:bg-green-700 text-white shadow-xl hover:shadow-2xl"}`}>
+                <button 
+                  onClick={handleBookingSubmit} 
+                  disabled={isSubmitting || !formData.time || !formData.sport || bookedSlots.includes(formData.time)} 
+                  className={`w-full py-4 rounded-xl text-xl font-bold transition-all ${(!formData.time || !formData.sport || isSubmitting || bookedSlots.includes(formData.time)) ? "bg-gray-400 text-white cursor-not-allowed" : "bg-green-600 hover:bg-green-700 text-white shadow-xl hover:shadow-2xl"}`}
+                >
                   {isSubmitting ? "กำลังดำเนินการ..." : "ยืนยันการจองสนาม (Book Now)"}
                 </button>
               </div>
@@ -542,7 +590,6 @@ export default function BookingPage() {
         </div>
       )}
 
-      {/* --- 3. Popup อัปโหลดสลิป --- */}
       {currentBookingId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-md p-4">
           <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full text-center overflow-y-auto max-h-[90vh] animate-fade-in-up">
@@ -589,15 +636,23 @@ export default function BookingPage() {
                 />
             </label>
             
-            <p className="text-red-500 text-xs mt-4 mb-6">
-                กรุณาทำรายการภายใน 15 นาที หากเลยเวลาคิวจองจะถูกยกเลิกอัตโนมัติ
-            </p>
+            <div className="mt-4 mb-6">
+              {currentExpiresAt && formatCountdown(currentExpiresAt) ? (
+                <p className="text-red-500 text-sm font-bold bg-red-50 py-2 rounded-lg border border-red-100 flex items-center justify-center gap-1.5">
+                  <span className="animate-pulse">⏳</span> กรุณาทำรายการภายใน {formatCountdown(currentExpiresAt)} นาที
+                </p>
+              ) : (
+                <p className="text-red-500 text-sm font-bold bg-red-50 py-2 rounded-lg border border-red-100">
+                  ⚠️ หมดเวลาทำรายการ คิวถูกยกเลิกแล้ว
+                </p>
+              )}
+            </div>
             
             <div className="flex flex-col gap-3">
               {selectedFile && (
                   <button 
                     onClick={confirmAndUploadSlip} 
-                    disabled={isSubmitting} 
+                    disabled={isSubmitting || (!currentExpiresAt || !formatCountdown(currentExpiresAt))} 
                     className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 rounded-xl transition-all shadow-md disabled:bg-gray-300"
                   >
                     {isSubmitting ? "กำลังอัปโหลด..." : "✅ ยืนยันและส่งสลิป"}
@@ -616,6 +671,7 @@ export default function BookingPage() {
                   onClick={() => { 
                       setCurrentBookingId(null); 
                       setCurrentShortId(null); 
+                      setCurrentExpiresAt(null);
                       setSelectedFile(null);
                   }} 
                   disabled={isSubmitting} 
@@ -629,7 +685,6 @@ export default function BookingPage() {
         </div>
       )}
 
-      {/* --- Popup แจ้งเตือนยืนยันการยกเลิกการจอง --- */}
       {showCancelConfirm && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
           <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-sm w-full text-center animate-fade-in-up">
@@ -658,7 +713,6 @@ export default function BookingPage() {
         </div>
       )}
 
-      {/* --- 4. Popup ประวัติการจอง (My Session) --- */}
       {showHistory && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-md p-4">
           <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-5xl relative overflow-y-auto max-h-[90vh] animate-fade-in-up">
@@ -671,13 +725,13 @@ export default function BookingPage() {
               <p className="text-center text-gray-500 py-10">คุณยังไม่มีประวัติการจองครับ</p>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse min-w-[700px]">
+                <table className="w-full text-left border-collapse min-w-[800px]">
                   <thead>
                     <tr className="bg-gray-50 text-gray-500 text-sm uppercase tracking-wide border-b border-gray-200">
                       <th className="px-4 py-3 font-semibold rounded-tl-lg">รหัสอ้างอิง</th>
                       <th className="px-4 py-3 font-semibold">ประเภทกีฬา</th>
-                      <th className="px-4 py-3 font-semibold">วันที่</th>
-                      <th className="px-4 py-3 font-semibold">เวลา</th>
+                      <th className="px-4 py-3 font-semibold">วันเวลาที่ใช้งาน</th>
+                      <th className="px-4 py-3 font-semibold">ทำรายการเมื่อ</th>
                       <th className="px-4 py-3 font-semibold">สถานะ</th>
                       <th className="px-4 py-3 font-semibold rounded-tr-lg">ใบเสร็จ</th>
                     </tr>
@@ -685,25 +739,45 @@ export default function BookingPage() {
                   <tbody className="divide-y divide-gray-100">
                     {userBookings.map((b) => {
                       const st = b.startTime?.toDate();
-                      const dateStr = st ? st.toLocaleDateString("th-TH", { year: 'numeric', month: 'long', day: 'numeric' }) : "-";
-                      const timeStr = st ? `${st.getHours().toString().padStart(2, "0")}:00 - ${(st.getHours() + 1).toString().padStart(2, "0")}:00` : "-";
+                      const sessionDate = st ? st.toLocaleDateString("th-TH", { year: 'numeric', month: 'short', day: 'numeric' }) : "-";
+                      const sessionTime = st ? `${st.getHours().toString().padStart(2, "0")}:00 - ${(st.getHours() + 1).toString().padStart(2, "0")}:00` : "-";
                       
+                      const ct = b.createdAt?.toDate();
+                      const createdStr = ct ? `${ct.toLocaleDateString("th-TH", { year: 'numeric', month: 'short', day: 'numeric' })} ${ct.getHours().toString().padStart(2, "0")}:${ct.getMinutes().toString().padStart(2, "0")} น.` : "-";
+
                       const sportName = SPORT_TYPES[b.sportType as keyof typeof SPORT_TYPES]?.name || b.sportType;
 
                       return (
                         <tr key={b.id} className="hover:bg-gray-50 transition-colors">
                           <td className="px-4 py-4 font-bold text-gray-800">{b.shortId || "-"}</td>
                           <td className="px-4 py-4 text-gray-700 font-medium">{sportName} <span className="text-sm text-gray-400 block">สนามที่ {b.courtNumber}</span></td>
-                          <td className="px-4 py-4 text-gray-600">{dateStr}</td>
-                          <td className="px-4 py-4 text-gray-600">{timeStr}</td>
+                          
+                          <td className="px-4 py-4 text-gray-700">
+                            <div className="font-semibold">{sessionDate}</div>
+                            <div className="text-sm text-gray-500">{sessionTime}</div>
+                          </td>
+                          
+                          <td className="px-4 py-4 text-gray-600 text-sm font-medium">
+                            {createdStr}
+                          </td>
+                          
                           <td className="px-4 py-4">
-                            {b.status === "pending" && <span className="text-yellow-700 bg-yellow-100 px-3 py-1 rounded-full text-xs font-bold border border-yellow-200">Pending</span>}
-                            {b.status === "uploaded" && <span className="text-blue-700 bg-blue-100 px-3 py-1 rounded-full text-xs font-bold border border-blue-200">Checking</span>}
-                            {b.status === "confirmed" && <span className="text-green-700 bg-green-100 px-4 py-1.5 rounded-full text-sm font-bold border border-green-200 shadow-sm">Active</span>}
-                            {b.status === "cancelled" && <span className="text-red-700 bg-red-100 px-3 py-1 rounded-full text-xs font-bold border border-red-200">Canceled</span>}
+                            {b.status === "pending" && (
+                               <div className="flex flex-col items-start gap-1">
+                                  <span className="text-yellow-700 bg-yellow-100 px-3 py-1 rounded-full text-sm font-bold border border-yellow-200">Pending</span>
+                                  {(() => {
+                                     const timer = formatCountdown(b.expiresAt?.toDate());
+                                     return timer ? <span className="text-red-500 text-xs font-bold pl-1">⏳ {timer}</span> : null;
+                                  })()}
+                               </div>
+                            )}
+                            {b.status === "uploaded" && <span className="text-blue-700 bg-blue-100 px-3 py-1 rounded-full text-sm font-bold border border-blue-200">Uploaded</span>}
+                            {b.status === "confirmed" && <span className="text-green-700 bg-green-100 px-3 py-1 rounded-full text-sm font-bold border border-green-200">Confirmed</span>}
+                            {b.status === "completed" && <span className="text-gray-600 bg-gray-100 px-3 py-1 rounded-full text-sm font-bold border border-gray-200">Completed</span>}
+                            {b.status === "cancelled" && <span className="text-red-700 bg-red-100 px-3 py-1 rounded-full text-sm font-bold border border-red-200">Cancelled</span>}
                           </td>
                           <td className="px-4 py-4">
-                            {b.status === "confirmed" && (
+                            {(b.status === "confirmed" || b.status === "completed") && (
                               <button 
                                 onClick={() => setReceiptData(b)}
                                 className="text-white bg-gray-800 hover:bg-black px-4 py-1.5 rounded-lg text-sm font-semibold transition-all shadow-md"
@@ -716,6 +790,7 @@ export default function BookingPage() {
                                 onClick={() => {
                                   setCurrentBookingId(b.id);
                                   setCurrentShortId(b.shortId);
+                                  setCurrentExpiresAt(b.expiresAt?.toDate() || null);
                                   setShowHistory(false); 
                                 }}
                                 className="text-white bg-blue-500 hover:bg-blue-600 px-4 py-1.5 rounded-lg text-sm font-semibold transition-all shadow-md"
@@ -738,7 +813,6 @@ export default function BookingPage() {
         </div>
       )}
 
-      {/* --- 5. Popup ใบเสร็จ (Digital Receipt) --- */}
       {receiptData && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4">
           <div className="bg-[#f2ece4] p-4 rounded-3xl max-w-sm w-full relative shadow-2xl animate-fade-in-up">
