@@ -9,7 +9,10 @@ import {
   doc,
   updateDoc,
 } from "firebase/firestore";
-import { db } from "../../lib/firebase";
+// 🎯 1. นำเข้า auth, signOut และ useRouter
+import { signOut } from "firebase/auth";
+import { db, auth } from "../../lib/firebase";
+import { useRouter } from "next/navigation"; 
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -43,13 +46,12 @@ const TIME_SLOTS = [
   "15:00","16:00","17:00","18:00","19:00","20:00",
 ];
 
-// 🎯 เปลี่ยนชื่อ Label เป็นภาษาอังกฤษ และปรับสีให้ตรงกับฝั่ง User แบบ 100%
 const STATUS_CONFIG = {
-  pending:   { label: "Pending",   short: "Pending",   color: "#a16207", bg: "#fef9c3", dot: "#eab308" }, // สีเหลือง
-  uploaded:  { label: "Uploaded",  short: "Uploaded",  color: "#1d4ed8", bg: "#dbeafe", dot: "#3b82f6" }, // สีน้ำเงิน
-  confirmed: { label: "Confirmed", short: "Confirmed", color: "#15803d", bg: "#dcfce7", dot: "#22c55e" }, // สีเขียว
-  completed: { label: "Completed", short: "Completed", color: "#4b5563", bg: "#f3f4f6", dot: "#6b7280" }, // สีเทา
-  cancelled: { label: "Cancelled", short: "Cancelled", color: "#b91c1c", bg: "#fee2e2", dot: "#ef4444" }, // สีแดง
+  pending:   { label: "Pending",   short: "Pending",   color: "#a16207", bg: "#fef9c3", dot: "#eab308" },
+  uploaded:  { label: "Uploaded",  short: "Uploaded",  color: "#1d4ed8", bg: "#dbeafe", dot: "#3b82f6" },
+  confirmed: { label: "Confirmed", short: "Confirmed", color: "#15803d", bg: "#dcfce7", dot: "#22c55e" },
+  completed: { label: "Completed", short: "Completed", color: "#4b5563", bg: "#f3f4f6", dot: "#6b7280" },
+  cancelled: { label: "Cancelled", short: "Cancelled", color: "#b91c1c", bg: "#fee2e2", dot: "#ef4444" },
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -119,9 +121,9 @@ function BookingDetailModal({
       >
         <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <span className="text-xl">{sportCfg.emoji}</span>
+            <span className="text-xl">{sportCfg?.emoji}</span>
             <span className="font-bold text-gray-800">
-              {sportCfg.label} สนาม {booking.courtNumber}
+              {sportCfg?.label} สนาม {booking.courtNumber}
             </span>
           </div>
           <div className="flex items-center gap-3">
@@ -195,6 +197,8 @@ function BookingDetailModal({
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 export default function AdminPage() {
+  const router = useRouter(); // 🎯 เรียกใช้งาน Router
+
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [pin, setPin] = useState("");
   const ADMIN_PIN = "1234";
@@ -205,8 +209,7 @@ export default function AdminPage() {
   const [view, setView] = useState<"list" | "calendar">("list");
   const [selectedSport, setSelectedSport] = useState<string>("all");
   
-  // 🎯 State สำหรับสลับหน้า "คิวปัจจุบัน (active)" กับ "ประวัติย้อนหลัง (history)"
-  const [listTab, setListTab] = useState<"active" | "history">("active");
+  const [listTab, setListTab] = useState<"action" | "confirmed" | "history">("action");
   
   const [selectedDate, setSelectedDate] = useState(() => {
     const d = new Date();
@@ -245,6 +248,17 @@ export default function AdminPage() {
     } else {
       alert("รหัส PIN ไม่ถูกต้อง!");
       setPin("");
+    }
+  };
+
+  // 🎯 2. ฟังก์ชันออกจากระบบของแอดมิน
+  const handleLogout = async () => {
+    try {
+      await signOut(auth); // เตะ session ออกจากระบบ firebase
+      setIsAuthenticated(false);
+      router.replace("/"); // เปลี่ยนเส้นทางกลับไปหน้าแรก (/)
+    } catch (error) {
+      console.error("Logout failed", error);
     }
   };
 
@@ -289,33 +303,26 @@ export default function AdminPage() {
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
   const dk = toDateKey(selectedDate);
 
-  // 🎯 ฟิลเตอร์ข้อมูลครอบจักรวาล (กรองทั้งกีฬา, แท็บ Active/History, และคำค้นหา)
   const filteredBookings = bookings.filter((b) => {
-    // 1. ถ้ามีการค้นหารหัส ให้ดึงออกมาโชว์เลยโดยไม่ต้องสนว่าอยู่แท็บไหน
     if (searchQuery.trim() !== "") {
       return b.shortId?.toLowerCase().includes(searchQuery.toLowerCase().trim());
     }
     
-    // 2. กรองตามประเภทกีฬา
     if (selectedSport !== "all" && b.sportType !== selectedSport) return false;
 
-    // 3. กรองตามแท็บ (Active vs History)
-    const isActiveStatus = ["pending", "uploaded", "confirmed"].includes(b.status || "");
-    if (listTab === "active" && !isActiveStatus) return false;
-    if (listTab === "history" && isActiveStatus) return false;
+    if (listTab === "action" && !["pending", "uploaded"].includes(b.status || "")) return false;
+    if (listTab === "confirmed" && b.status !== "confirmed") return false;
+    if (listTab === "history" && !["completed", "cancelled"].includes(b.status || "")) return false;
 
     return true;
   });
 
-  // 🎯 เรียงลำดับข้อมูล
   filteredBookings.sort((a, b) => {
-    if (listTab === "active") {
-      // หน้า Active: เรียงเวลาที่ใกล้ถึงที่สุดขึ้นก่อน (Ascending)
+    if (listTab === "action" || listTab === "confirmed") {
       const timeA = a.startTime?.toDate().getTime() || Infinity;
       const timeB = b.startTime?.toDate().getTime() || Infinity;
       return timeA - timeB; 
     } else {
-      // หน้า History: เรียงรายการที่ทำล่าสุดขึ้นก่อน (Descending)
       const timeA = a.createdAt?.toDate().getTime() || 0;
       const timeB = b.createdAt?.toDate().getTime() || 0;
       return timeB - timeA; 
@@ -343,7 +350,7 @@ export default function AdminPage() {
 
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
+      <div className="min-h-screen bg-gray-900 flex flex-col items-center justify-center p-4">
         <div className="bg-white p-8 rounded-2xl shadow-2xl max-w-sm w-full text-center">
           <div className="text-4xl mb-3">🔐</div>
           <h2 className="text-2xl font-bold text-gray-800 mb-1">Staff Only</h2>
@@ -358,10 +365,18 @@ export default function AdminPage() {
               placeholder="••••"
               autoFocus
             />
-            <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl transition-all">
+            <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl transition-all mb-4">
               เข้าสู่ระบบ
             </button>
           </form>
+          
+          {/* 🎯 3. ปุ่มออกจากระบบหน้า PIN (กึ่งกลาง) */}
+          <button 
+            onClick={handleLogout}
+            className="text-red-500 hover:text-red-700 text-sm font-bold underline transition-colors"
+          >
+            ออกจากระบบ (Logout)
+          </button>
         </div>
       </div>
     );
@@ -391,15 +406,23 @@ export default function AdminPage() {
             >
               📅 ตารางสนาม
             </button>
+            
+            {/* 🎯 4. ปุ่มออกจากระบบหน้า Dashboard (มุมบนขวา) */}
+            <div className="w-px h-6 bg-gray-300 mx-1"></div> {/* เส้นคั่น */}
+            <button
+              onClick={handleLogout}
+              className="px-4 py-1.5 rounded-lg text-sm font-bold text-red-500 hover:bg-red-50 hover:text-red-600 transition-all"
+            >
+              ออกจากระบบ
+            </button>
           </div>
         </div>
       </div>
 
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-5">
         
-        <div className="flex flex-col md:flex-row justify-between gap-4">
+        <div className="flex flex-col xl:flex-row justify-between gap-4">
           
-          {/* ปุ่มเลือกประเภทกีฬา */}
           <div className="flex flex-wrap gap-3">
             {Object.entries(SPORT_CONFIG).map(([key, cfg]) => {
               const total = bookings.filter((b) => b.sportType === key && b.status !== "cancelled").length;
@@ -439,11 +462,9 @@ export default function AdminPage() {
             })}
           </div>
 
-          {/* 🎯 โซนช่องค้นหา และ ปุ่มสลับหน้า Active/History */}
-          <div className="flex flex-col gap-3 w-full md:w-auto">
+          <div className="flex flex-col gap-3 w-full xl:w-auto">
             
-            {/* ช่องค้นหา */}
-            <div className="relative w-full md:w-[340px]">
+            <div className="relative w-full xl:w-[400px]">
               <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                 <span className="text-gray-400 text-lg">🔍</span>
               </div>
@@ -469,20 +490,25 @@ export default function AdminPage() {
               )}
             </div>
 
-            {/* 🎯 ปุ่ม Toggle สลับหน้าคิวปัจจุบัน / ประวัติ (โชว์เฉพาะหน้า List) */}
             {view === "list" && !searchQuery && (
-              <div className="flex bg-gray-200/70 p-1.5 rounded-xl">
+              <div className="flex bg-gray-200/70 p-1.5 rounded-xl overflow-x-auto">
                 <button 
-                  onClick={() => setListTab("active")} 
-                  className={`flex-1 py-1.5 px-3 text-sm font-bold rounded-lg transition-all ${listTab === "active" ? "bg-white text-blue-600 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
+                  onClick={() => setListTab("action")} 
+                  className={`flex-1 min-w-[120px] py-1.5 px-3 text-sm font-bold rounded-lg transition-all whitespace-nowrap ${listTab === "action" ? "bg-white text-orange-600 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
+                >
+                  🟡 รอตรวจสอบ
+                </button>
+                <button 
+                  onClick={() => setListTab("confirmed")} 
+                  className={`flex-1 min-w-[120px] py-1.5 px-3 text-sm font-bold rounded-lg transition-all whitespace-nowrap ${listTab === "confirmed" ? "bg-white text-green-600 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
                 >
                   🟢 คิวใช้งาน
                 </button>
                 <button 
                   onClick={() => setListTab("history")} 
-                  className={`flex-1 py-1.5 px-3 text-sm font-bold rounded-lg transition-all ${listTab === "history" ? "bg-white text-gray-800 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
+                  className={`flex-1 min-w-[120px] py-1.5 px-3 text-sm font-bold rounded-lg transition-all whitespace-nowrap ${listTab === "history" ? "bg-white text-gray-800 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
                 >
-                  📁 ประวัติย้อนหลัง
+                  📁 ประวัติ
                 </button>
               </div>
             )}
@@ -495,7 +521,6 @@ export default function AdminPage() {
         {view === "list" && (
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
             
-            {/* 🎯 ป้ายแจ้งเตือนเล็กๆ ว่าตอนนี้อยู่หน้าประวัติย้อนหลัง */}
             {listTab === "history" && !searchQuery && (
               <div className="bg-gray-100 px-5 py-2.5 border-b border-gray-200 text-sm text-gray-600 font-semibold flex items-center gap-2">
                 <span>📁</span> กำลังแสดงผลข้อมูล <strong>"ประวัติย้อนหลัง"</strong> (รายการที่เสร็จสิ้นและยกเลิกแล้ว)
@@ -583,7 +608,7 @@ export default function AdminPage() {
                                 )}
                                 {booking.status === "confirmed" && (
                                   <button onClick={() => updateBookingStatus(booking.id, "completed")} className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-md transition-colors flex items-center gap-1">
-                                    เช็คอิน 🎫
+                                    เช็คอิน
                                   </button>
                                 )}
                                 {booking.status === "pending" && (
@@ -603,7 +628,9 @@ export default function AdminPage() {
                   <p className="text-center py-14 text-gray-400">
                     {searchQuery 
                       ? `ไม่พบข้อมูลรหัสอ้างอิง "${searchQuery}"` 
-                      : (selectedSport === "all" ? `ยังไม่มีข้อมูลในโหมด ${listTab === "active" ? "คิวใช้งาน" : "ประวัติย้อนหลัง"}` : `ไม่มีการจองสำหรับ${sportCfg?.label}`)}
+                      : (selectedSport === "all" 
+                          ? `ยังไม่มีข้อมูลในโหมด ${listTab === "action" ? "รอตรวจสอบ" : listTab === "confirmed" ? "คิวใช้งาน" : "ประวัติย้อนหลัง"}` 
+                          : `ไม่มีการจองสำหรับ${sportCfg?.label}`)}
                   </p>
                 )}
               </div>
@@ -784,10 +811,11 @@ export default function AdminPage() {
         )}
       </div>
 
-      {selectedBooking && sportCfg && (
+      {/* 🎯 สลับใช้ sportCfg จากตัว selectedBooking เสมอ เพื่อแก้บั๊กโหมด all */}
+      {selectedBooking && (
         <BookingDetailModal
           booking={selectedBooking}
-          sportCfg={sportCfg}
+          sportCfg={SPORT_CONFIG[selectedBooking.sportType || "football"] || SPORT_CONFIG.football}
           onClose={() => setSelectedBooking(null)}
           onConfirm={() => updateBookingStatus(selectedBooking.id, "confirmed")}
           onComplete={() => updateBookingStatus(selectedBooking.id, "completed")}

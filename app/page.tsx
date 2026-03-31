@@ -4,6 +4,9 @@ import React, { useState, useEffect } from "react";
 import { collection, doc, runTransaction, query, where, getDocs, updateDoc, onSnapshot } from "firebase/firestore";
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, User } from "firebase/auth";
 import { db, auth } from "../lib/firebase";
+import { useRouter } from "next/navigation"; 
+
+// ─── Constants ────────────────────────────────────────────────────────────────
 
 const SPORT_TYPES = {
   football: { name: "สนามฟุตบอล", count: 2 },
@@ -19,7 +22,17 @@ const SPORT_PREFIX = {
 
 const TIME_SLOTS = ["09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00"];
 
+const backgroundImages = [
+  "/ball.jpg", 
+  "/bas.jpeg", 
+  "/bat.jpg", 
+];
+
+// ─── Main Component ──────────────────────────────────────────────────────────
+
 export default function BookingPage() {
+  const router = useRouter(); 
+
   const [user, setUser] = useState<User | null>(null);
   const [showLoginPopup, setShowLoginPopup] = useState(false);
   const [isLoginMode, setIsLoginMode] = useState(true); 
@@ -27,6 +40,9 @@ export default function BookingPage() {
   const [authPassword, setAuthPassword] = useState("");
   const [authError, setAuthError] = useState("");
   const [isAuthLoading, setIsAuthLoading] = useState(false);
+  
+  // 🎯 State สำหรับกั้นหน้าจอตอนกำลังเตะแอดมินกลับไปหลังบ้าน
+  const [isAdminRedirecting, setIsAdminRedirecting] = useState(false);
 
   const [showForm, setShowForm] = useState(false);
   const [formData, setFormData] = useState({ name: "", tel: "", sport: "", courtNumber: "1", date: "", time: "" });
@@ -48,10 +64,20 @@ export default function BookingPage() {
   const [isCancelling, setIsCancelling] = useState(false);
 
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [currentBgIndex, setCurrentBgIndex] = useState(0);
+
+  // ─── Effects ────────────────────────────────────────────────────────────────
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const bgInterval = setInterval(() => {
+      setCurrentBgIndex((prevIndex) => (prevIndex + 1) % backgroundImages.length);
+    }, 3000);
+    return () => clearInterval(bgInterval);
   }, []);
 
   const formatCountdown = (expiresAt: Date | undefined) => {
@@ -63,23 +89,26 @@ export default function BookingPage() {
     return `${m}:${s}`;
   };
 
+  // 🎯 ยามเฝ้าประตู: ดักจับอีเมลแอดมินทุกครั้งที่มีการเข้าเว็บหรือรีเฟรช
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
+      if (currentUser && currentUser.email?.toLowerCase() === "admin555@email.com") {
+        setIsAdminRedirecting(true); // เปิดม่านบังหน้าจอ
+        router.replace("/admin"); // ใช้ replace เพื่อทำลายปุ่ม Back
+      } else {
+        setUser(currentUser);
+      }
     });
     return () => unsubscribe();
-  }, []);
+  }, [router]);
 
-  // 🎯 อัปเดตหน้าประวัติการจอง (My Sessions) ให้เป็น Real-time ด้วย onSnapshot
   useEffect(() => {
-    if (showHistory && user) {
+    if (showHistory && user && !isAdminRedirecting) {
       setIsLoadingHistory(true);
-      
       const q = query(collection(db, "bookings"), where("userId", "==", user.uid));
       
       const unsubscribe = onSnapshot(q, (snapshot) => {
         const now = new Date();
-        
         const data = snapshot.docs.map(docSnap => {
           const b = { id: docSnap.id, ...docSnap.data() } as any;
           if (b.status === "pending" && b.expiresAt && b.expiresAt.toDate() < now) {
@@ -89,7 +118,6 @@ export default function BookingPage() {
           return b;
         });
         
-        // เรียงลำดับจากรายการใหม่สุดไปเก่าสุด
         data.sort((a: any, b: any) => {
           const timeA = a.createdAt?.toDate().getTime() || 0;
           const timeB = b.createdAt?.toDate().getTime() || 0;
@@ -103,10 +131,11 @@ export default function BookingPage() {
         setIsLoadingHistory(false);
       });
 
-      // คืนค่าฟังก์ชันยกเลิกการติดตามเมื่อปิดหน้าต่างหรือเปลี่ยนยูสเซอร์
       return () => unsubscribe();
     }
-  }, [showHistory, user]);
+  }, [showHistory, user, isAdminRedirecting]);
+
+  // ─── Handlers ───────────────────────────────────────────────────────────────
 
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -119,7 +148,15 @@ export default function BookingPage() {
       } else {
         await createUserWithEmailAndPassword(auth, authEmail, authPassword);
       }
-      setShowLoginPopup(false);
+      
+      // ลอจิกสำหรับปุ่มตอนล็อกอินยังเก็บไว้เผื่อเหนียวครับ
+      if (authEmail.toLowerCase() === "admin555@email.com") {
+        setIsAdminRedirecting(true);
+        router.replace("/admin");
+      } else {
+        setShowLoginPopup(false);
+      }
+
       setAuthEmail("");
       setAuthPassword("");
     } catch (error: any) {
@@ -379,17 +416,32 @@ export default function BookingPage() {
     }
   };
 
+  // ─── Rendering ──────────────────────────────────────────────────────────────
+
+  // 🎯 ถ้าเป็นแอดมินกำลังถูกเตะไปหน้าหลังบ้าน ให้โชว์หน้าจอดำๆ พร้อมข้อความเลยครับ
+  if (isAdminRedirecting) {
+    return (
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-12 h-12 border-4 border-green-500 border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-white text-xl font-bold animate-pulse">กำลังพาท่านไปยังหน้า Staff Dashboard...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="relative min-h-screen bg-gray-900 flex items-center">
+    <div className="relative min-h-screen flex items-center justify-center overflow-hidden">
       
-      <div className="absolute top-6 right-6 lg:right-12 z-20">
+      <div className="fixed top-0 left-0 right-0 z-50 flex items-center justify-between p-6 bg-gradient-to-b from-black/50 to-transparent">
+        <span className="text-xl font-bold text-white tracking-wider">CourtHub</span>
         {user ? (
           <div className="flex items-center gap-4 bg-black/40 backdrop-blur-md px-5 py-2.5 rounded-full border border-white/10 shadow-lg">
             <button 
               onClick={() => setShowHistory(true)}
               className="text-white font-semibold hover:text-green-400 transition-colors text-sm flex items-center gap-2"
             >
-              📋 ประวัติการจอง
+              📋 ประวัติ
             </button>
             <div className="w-px h-4 bg-white/30"></div>
             <span className="text-white font-medium text-sm">สวัสดี, <span className="text-green-400">{getUserName()}</span></span>
@@ -410,37 +462,47 @@ export default function BookingPage() {
         )}
       </div>
 
-      <div 
-        className="absolute inset-0 bg-cover bg-center opacity-40"
-        style={{ backgroundImage: "url('https://images.unsplash.com/photo-1518605368461-1ee12db01037?ixlib=rb-4.0.3&auto=format&fit=crop&w=2000&q=80')" }}
-      ></div>
+      {backgroundImages.map((img, index) => (
+        <div 
+          key={img}
+          className={`absolute inset-0 bg-cover bg-center transition-opacity duration-1000 ${currentBgIndex === index ? "opacity-100" : "opacity-0"}`}
+          style={{ backgroundImage: `url('${img}')` }}
+        />
+      ))}
+      <div className="absolute inset-0 bg-black/40 z-10" />
 
-      <div className="relative z-10 container mx-auto px-6 lg:px-12 flex flex-col md:flex-row items-center justify-between">
-        <div className="text-white max-w-2xl mb-10 md:mb-0 mt-16 md:mt-0">
-          <h1 className="text-5xl md:text-7xl font-extrabold mb-6 leading-tight">
-            Choose Your Turf <br className="hidden md:block"/>
-            <span className="text-green-400">Play Your Game.</span>
-          </h1>
-          <p className="text-lg md:text-xl text-gray-300 mb-8">
-            จองสนามกีฬาคุณภาพสูงทั้ง ฟุตบอล, แบดมินตัน และ บาสเก็ตบอล ได้ง่ายๆ เพียงไม่กี่คลิก
-          </p>
-        </div>
-
-        <div className="bg-white/10 backdrop-blur-md p-8 rounded-3xl border border-white/20 shadow-2xl flex flex-col items-center max-w-sm w-full">
-          <h3 className="text-2xl font-bold text-white mb-4 text-center">ค้นหาและจองสนามได้ทันที</h3>
-          <p className="text-gray-300 mb-8 text-center text-sm">เลือกประเภทกีฬาและวันเวลาที่คุณต้องการ</p>
-          <button 
-            onClick={handleBookNowClick}
-            className="w-full bg-green-500 hover:bg-green-600 text-white font-bold text-xl py-4 px-8 rounded-full shadow-lg hover:shadow-green-500/50 transition-all flex justify-between items-center group"
-          >
-            <span>Book Court Now</span>
-            <span className="bg-white text-green-500 rounded-full w-8 h-8 flex items-center justify-center group-hover:translate-x-1 transition-transform">→</span>
-          </button>
-        </div>
+      <div className="relative z-20 text-center text-white px-6 max-w-4xl animate-fade-in-up">
+        <h1 className="text-6xl md:text-8xl font-extrabold mb-8 leading-tight tracking-tighter">
+          Your Game <br className="hidden md:block"/>
+          <span className="text-green-400">Starts Here!</span>
+        </h1>
+        <p className="text-xl md:text-2xl text-gray-200 mb-12 max-w-2xl mx-auto font-light leading-relaxed">
+          จองสนามกีฬาคุณภาพสูง ทั้ง ฟุตบอล, แบดมินตัน <br/> และ บาสเก็ตบอล ได้ง่ายๆ เพียงไม่กี่คลิก
+        </p>
+        <button 
+          onClick={handleBookNowClick}
+          className="bg-green-500 hover:bg-green-600 text-white font-bold text-2xl py-5 px-12 rounded-full shadow-2xl hover:shadow-green-500/50 transition-all hover:-translate-y-1"
+        >
+          Book Court Now →
+        </button>
       </div>
 
+      <div className="absolute bottom-10 left-1/2 -translate-x-1/2 z-30 flex gap-4 p-2 bg-black/20 rounded-full backdrop-blur-sm">
+        {backgroundImages.map((_, index) => (
+          <button
+            key={index}
+            onClick={() => setCurrentBgIndex(index)}
+            className={`w-4 h-4 rounded-full transition-all duration-300 ${currentBgIndex === index ? "bg-green-400 scale-125 shadow-md" : "bg-white/50 hover:bg-white"}`}
+            aria-label={`ดูรูปที่ ${index + 1}`}
+          />
+        ))}
+      </div>
+
+      {/* ────────────────── Popups และ Modals ────────────────── */}
+
+      {/* Login Popup */}
       {showLoginPopup && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-md p-4">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-md p-4">
           <div className="bg-white rounded-2xl p-8 max-w-sm w-full relative shadow-2xl animate-fade-in-up">
             <button onClick={() => { setShowLoginPopup(false); setAuthError(""); }} className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-full border border-gray-200 text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors">✕</button>
             <h2 className="text-3xl font-bold text-gray-800 mb-6">{isLoginMode ? "Login" : "Sign Up"}</h2>
@@ -468,11 +530,12 @@ export default function BookingPage() {
         </div>
       )}
 
+      {/* Booking Form Popup */}
       {showForm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-md p-4">
-          <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-2xl relative overflow-y-auto max-h-[90vh] animate-fade-in-up">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-md p-4">
+          <div className="bg-white p-6 md:p-8 rounded-2xl shadow-xl w-full max-w-2xl relative overflow-y-auto max-h-[90vh] animate-fade-in-up">
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-3xl font-bold text-gray-800">Create Your Booking</h2>
+              <h2 className="text-2xl md:text-3xl font-bold text-gray-800">Create Your Booking</h2>
               <button onClick={() => { setShowForm(false); resetFormData(); }} className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-full border border-gray-200 text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors">✕</button>
             </div>
 
@@ -590,38 +653,49 @@ export default function BookingPage() {
         </div>
       )}
 
+      {/* Upload Slip Popup */}
       {currentBookingId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-md p-4">
-          <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full text-center overflow-y-auto max-h-[90vh] animate-fade-in-up">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-md p-4">
+          <div className="bg-white p-6 rounded-2xl shadow-xl max-w-md w-full text-center overflow-y-auto max-h-[90vh] animate-fade-in-up">
+            
             <h2 className="text-2xl font-bold text-gray-800 mb-2">อัปโหลดสลิปชำระเงิน</h2>
-            <p className="text-gray-600 mb-1">
-                โปรดโอนเงินและแนบหลักฐานสำหรับรหัสการจอง
-            </p>
-            <div className="text-4xl font-extrabold text-blue-600 mb-6 tracking-wider">
+            
+            <div className="text-2xl font-extrabold text-blue-600 mb-4 tracking-wider">
                 #{currentShortId}
+            </div>
+
+            <div className="bg-yellow-50 border-2 border-yellow-300 text-yellow-800 px-4 py-3 rounded-xl mb-4 shadow-sm text-center flex flex-col items-center justify-center">
+              <span className="text-lg font-black mb-1 text-red-600">⚠️ คำเตือน: โอนเงินแล้วโปรดแนบสลิปทันที!</span>
+              <span className="text-xs font-bold leading-relaxed opacity-90">หากคิวหลุดเนื่องจากหมดเวลา<br/>ทางศูนย์ขอสงวนสิทธิ์ไม่รับผิดชอบทุกกรณี</span>
+            </div>
+
+            <div className="mb-4 flex flex-col items-center justify-center bg-blue-50 p-3 rounded-xl border border-blue-100">
+              <img 
+                src="/promptpay.jpg" 
+                alt="QR Code รับเงิน" 
+                className="w-36 h-36 object-cover rounded-xl shadow-sm border-2 border-white"
+              />
+              <p className="text-xs text-gray-600 mt-2 font-semibold">บัญชี: ชินวัณ ศรีประสงค์</p>
             </div>
             
             <label 
                 htmlFor="fileUpload" 
-                className={`flex flex-col items-center justify-center w-full h-44 border-2 border-gray-300 border-dashed rounded-2xl cursor-pointer bg-gray-50 transition-colors ${selectedFile ? 'border-green-300 bg-green-50' : 'hover:border-blue-300 hover:bg-blue-50'}`}
+                className={`flex flex-col items-center justify-center w-full py-4 border-2 border-gray-300 border-dashed rounded-2xl cursor-pointer bg-gray-50 transition-colors ${selectedFile ? 'border-green-300 bg-green-50' : 'hover:border-blue-300 hover:bg-blue-50'}`}
             >
-                <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                    <span className={`text-4xl mb-3 ${selectedFile ? 'mix-blend-multiply' : ''}`}>
+                <div className="flex flex-col items-center justify-center">
+                    <span className={`text-3xl mb-1 ${selectedFile ? 'mix-blend-multiply' : ''}`}>
                         {selectedFile ? '🖼️' : '📁'}
                     </span>
                     {selectedFile ? (
                         <div className="text-center px-4">
-                            <p className="mb-1 text-sm text-green-700 font-bold truncate max-w-xs">{selectedFile.name}</p>
-                            <p className="text-xs text-green-600 opacity-80">
-                                ขนาด: {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
-                            </p>
-                            <span className="text-xs text-gray-400 underline mt-2 block">คลิกเพื่อเปลี่ยนรูป</span>
+                            <p className="mb-1 text-sm text-green-700 font-bold truncate max-w-[200px]">{selectedFile.name}</p>
+                            <span className="text-xs text-gray-400 underline mt-1 block">คลิกเพื่อเปลี่ยนรูป</span>
                         </div>
                     ) : (
                         <>
-                            <p className="mb-2 text-sm text-gray-500 font-semibold">คลิกเพื่อเลือกไฟล์รูปภาพสลิป</p>
-                            <p className="text-xs text-gray-400">
-                                (รองรับไฟล์รูปภาพ JPG, PNG ขนาดห้ามเกิน 5MB)
+                            <p className="mb-1 text-sm text-gray-600 font-semibold">คลิกเพื่อเลือกไฟล์สลิป</p>
+                            <p className="text-[10px] text-gray-400">
+                                (JPG, PNG ขนาดไม่เกิน 5MB)
                             </p>
                         </>
                     )}
@@ -636,36 +710,36 @@ export default function BookingPage() {
                 />
             </label>
             
-            <div className="mt-4 mb-6">
+            <div className="mt-3 mb-4">
               {currentExpiresAt && formatCountdown(currentExpiresAt) ? (
-                <p className="text-red-500 text-sm font-bold bg-red-50 py-2 rounded-lg border border-red-100 flex items-center justify-center gap-1.5">
-                  <span className="animate-pulse">⏳</span> กรุณาทำรายการภายใน {formatCountdown(currentExpiresAt)} นาที
+                <p className="text-red-500 text-sm font-bold bg-red-50 py-1.5 rounded-lg border border-red-100 flex items-center justify-center gap-1.5">
+                  <span className="animate-pulse">⏳</span> หมดเวลาใน {formatCountdown(currentExpiresAt)} นาที
                 </p>
               ) : (
-                <p className="text-red-500 text-sm font-bold bg-red-50 py-2 rounded-lg border border-red-100">
+                <p className="text-red-500 text-sm font-bold bg-red-50 py-1.5 rounded-lg border border-red-100">
                   ⚠️ หมดเวลาทำรายการ คิวถูกยกเลิกแล้ว
                 </p>
               )}
             </div>
             
-            <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-2">
               {selectedFile && (
                   <button 
                     onClick={confirmAndUploadSlip} 
                     disabled={isSubmitting || (!currentExpiresAt || !formatCountdown(currentExpiresAt))} 
-                    className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 rounded-xl transition-all shadow-md disabled:bg-gray-300"
+                    className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-2.5 rounded-xl transition-all shadow-md disabled:bg-gray-300"
                   >
                     {isSubmitting ? "กำลังอัปโหลด..." : "✅ ยืนยันและส่งสลิป"}
                   </button>
               )}
               
-              <div className="flex gap-3">
+              <div className="flex gap-2">
                 <button 
                   onClick={() => setShowCancelConfirm(true)} 
                   disabled={isSubmitting} 
-                  className="flex-1 px-4 py-2.5 bg-red-50 text-red-600 border border-red-200 rounded-xl hover:bg-red-100 font-bold text-sm transition-colors disabled:opacity-50"
+                  className="flex-1 px-4 py-2 bg-red-50 text-red-600 border border-red-200 rounded-xl hover:bg-red-100 font-bold text-sm transition-colors disabled:opacity-50"
                 >
-                  ยกเลิกการจอง
+                  ยกเลิกคิวนี้
                 </button>
                 <button 
                   onClick={() => { 
@@ -675,7 +749,7 @@ export default function BookingPage() {
                       setSelectedFile(null);
                   }} 
                   disabled={isSubmitting} 
-                  className="flex-1 px-4 py-2.5 bg-gray-100 text-gray-700 rounded-xl hover:bg-gray-200 font-bold text-sm transition-colors disabled:opacity-50"
+                  className="flex-1 px-4 py-2 bg-gray-100 text-gray-700 rounded-xl hover:bg-gray-200 font-bold text-sm transition-colors disabled:opacity-50"
                 >
                   ปิดหน้าต่าง
                 </button>
@@ -685,8 +759,9 @@ export default function BookingPage() {
         </div>
       )}
 
+      {/* Cancel Confirmation Popup */}
       {showCancelConfirm && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
           <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-sm w-full text-center animate-fade-in-up">
             <div className="text-red-500 text-5xl mb-4">⚠️</div>
             <h3 className="text-xl font-bold text-gray-800 mb-2">ยืนยันการยกเลิกการจอง?</h3>
@@ -713,8 +788,9 @@ export default function BookingPage() {
         </div>
       )}
 
+      {/* My Sessions (History) Modal */}
       {showHistory && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-md p-4">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-md p-4">
           <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-5xl relative overflow-y-auto max-h-[90vh] animate-fade-in-up">
             <button onClick={() => setShowHistory(false)} className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-full border border-gray-200 text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors">✕</button>
             <h2 className="text-3xl font-bold text-gray-800 mb-6 border-b pb-4">ประวัติการจอง (My Sessions)</h2>
@@ -813,8 +889,9 @@ export default function BookingPage() {
         </div>
       )}
 
+      {/* Receipt Modal */}
       {receiptData && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-md p-4">
           <div className="bg-[#f2ece4] p-4 rounded-3xl max-w-sm w-full relative shadow-2xl animate-fade-in-up">
             <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
               <div className="flex justify-between items-start mb-6">
