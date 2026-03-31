@@ -9,8 +9,7 @@ import {
   doc,
   updateDoc,
 } from "firebase/firestore";
-// 🎯 1. นำเข้า auth, signOut และ useRouter
-import { signOut } from "firebase/auth";
+import { signOut, onAuthStateChanged } from "firebase/auth";
 import { db, auth } from "../../lib/firebase";
 import { useRouter } from "next/navigation"; 
 
@@ -64,8 +63,12 @@ function isSameDay(a: Date, b: Date) {
   );
 }
 
+// 🎯 แก้ไขปัญหา Timezone +7 โดยใช้ Local Time ล้วนๆ แทน toISOString()
 function toDateKey(d: Date) {
-  return d.toISOString().split("T")[0];
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function addDays(d: Date, n: number) {
@@ -197,8 +200,16 @@ function BookingDetailModal({
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 export default function AdminPage() {
-  const router = useRouter(); // 🎯 เรียกใช้งาน Router
+  const router = useRouter();
 
+  const [alertConfig, setAlertConfig] = useState<{
+    show: boolean;
+    message: string;
+    type: 'alert' | 'confirm';
+    onConfirm?: () => void;
+  }>({ show: false, message: '', type: 'alert' });
+
+  const [isAuthChecking, setIsAuthChecking] = useState(true); 
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [pin, setPin] = useState("");
   const ADMIN_PIN = "1234";
@@ -228,6 +239,17 @@ export default function AdminPage() {
   const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      if (currentUser && currentUser.email?.toLowerCase() === "admin555@email.com") {
+        setIsAuthChecking(false);
+      } else {
+        router.replace("/");
+      }
+    });
+    return () => unsubscribe();
+  }, [router]);
+
+  useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
@@ -246,17 +268,16 @@ export default function AdminPage() {
     if (pin === ADMIN_PIN) {
       setIsAuthenticated(true);
     } else {
-      alert("รหัส PIN ไม่ถูกต้อง!");
+      setAlertConfig({ show: true, type: 'alert', message: "รหัส PIN ไม่ถูกต้อง!" });
       setPin("");
     }
   };
 
-  // 🎯 2. ฟังก์ชันออกจากระบบของแอดมิน
   const handleLogout = async () => {
     try {
-      await signOut(auth); // เตะ session ออกจากระบบ firebase
+      await signOut(auth); 
       setIsAuthenticated(false);
-      router.replace("/"); // เปลี่ยนเส้นทางกลับไปหน้าแรก (/)
+      router.replace("/"); 
     } catch (error) {
       console.error("Logout failed", error);
     }
@@ -287,15 +308,23 @@ export default function AdminPage() {
     return () => unsubscribe();
   }, [isAuthenticated]);
 
-  const updateBookingStatus = async (bookingId: string, newStatus: string) => {
+  const updateBookingStatus = (bookingId: string, newStatus: string) => {
     const label = STATUS_CONFIG[newStatus as keyof typeof STATUS_CONFIG]?.label ?? newStatus;
-    if (!confirm(`เปลี่ยนสถานะเป็น "${label}"?`)) return;
-    try {
-      await updateDoc(doc(db, "bookings", bookingId), { status: newStatus });
-      setSelectedBooking(null); 
-    } catch {
-      alert("เกิดข้อผิดพลาดในการอัปเดตสถานะ");
-    }
+    
+    setAlertConfig({
+      show: true,
+      type: 'confirm',
+      message: `ยืนยันการเปลี่ยนสถานะเป็น "${label}" ใช่หรือไม่?`,
+      onConfirm: async () => {
+        try {
+          await updateDoc(doc(db, "bookings", bookingId), { status: newStatus });
+          setSelectedBooking(null);
+          setAlertConfig({ show: false, message: '', type: 'alert' });
+        } catch {
+          setAlertConfig({ show: true, type: 'alert', message: "เกิดข้อผิดพลาดในการอัปเดตสถานะ" });
+        }
+      }
+    });
   };
 
   const sportCfg = SPORT_CONFIG[selectedSport]; 
@@ -343,15 +372,67 @@ export default function AdminPage() {
 
   const bookingsByDay: Record<string, number> = {};
   bookings.forEach((b) => {
-    if (selectedSport === "all" || b.sportType !== selectedSport || !b.startTime || b.status === "cancelled") return;
+    if (selectedSport === "all" || b.sportType !== selectedSport || !b.startTime) return;
+    if (b.status === "cancelled") return;
+    
     const key = toDateKey(b.startTime.toDate());
     bookingsByDay[key] = (bookingsByDay[key] ?? 0) + 1;
   });
 
+  const customAlertModal = alertConfig.show && (
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <div className="bg-white p-6 rounded-3xl shadow-2xl max-w-sm w-full text-center animate-fade-in-up">
+        <div className="text-blue-500 text-5xl mb-4">
+          {alertConfig.type === 'confirm' ? '❓' : '💬'}
+        </div>
+        <h3 className="text-xl font-bold text-gray-800 mb-2">Staff Dashboard แจ้งเตือน</h3>
+        <p className="text-gray-600 mb-6 leading-relaxed">
+          {alertConfig.message}
+        </p>
+        <div className="flex gap-3">
+          {alertConfig.type === 'confirm' && (
+            <button 
+              onClick={() => setAlertConfig({ show: false, message: '', type: 'alert' })} 
+              className="flex-1 py-3 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-xl font-bold transition-all shadow-sm"
+            >
+              ยกเลิก
+            </button>
+          )}
+          <button 
+            onClick={() => {
+              if (alertConfig.type === 'confirm' && alertConfig.onConfirm) {
+                alertConfig.onConfirm();
+              } else {
+                setAlertConfig({ show: false, message: '', type: 'alert' });
+              }
+            }} 
+            className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold transition-all shadow-md"
+          >
+            ตกลง
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  // ─── Rendering ──────────────────────────────────────────────────────────────
+
+  if (isAuthChecking) {
+    return (
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-white text-xl font-bold animate-pulse">Checking Permissions...</p>
+        </div>
+      </div>
+    );
+  }
+
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-gray-900 flex flex-col items-center justify-center p-4">
-        <div className="bg-white p-8 rounded-2xl shadow-2xl max-w-sm w-full text-center">
+      <div className="min-h-screen bg-gray-900 flex flex-col items-center justify-center p-4 relative">
+        {customAlertModal}
+        <div className="bg-white p-8 rounded-2xl shadow-2xl max-w-sm w-full text-center z-10">
           <div className="text-4xl mb-3">🔐</div>
           <h2 className="text-2xl font-bold text-gray-800 mb-1">Staff Only</h2>
           <p className="text-gray-500 text-sm mb-6">กรุณาใส่รหัส PIN เพื่อเข้าสู่ระบบ</p>
@@ -370,7 +451,6 @@ export default function AdminPage() {
             </button>
           </form>
           
-          {/* 🎯 3. ปุ่มออกจากระบบหน้า PIN (กึ่งกลาง) */}
           <button 
             onClick={handleLogout}
             className="text-red-500 hover:text-red-700 text-sm font-bold underline transition-colors"
@@ -383,7 +463,9 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 relative">
+      {customAlertModal}
+
       <div className="bg-white border-b border-gray-200 px-6 py-4 sticky top-0 z-20 shadow-sm">
         <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -407,8 +489,7 @@ export default function AdminPage() {
               📅 ตารางสนาม
             </button>
             
-            {/* 🎯 4. ปุ่มออกจากระบบหน้า Dashboard (มุมบนขวา) */}
-            <div className="w-px h-6 bg-gray-300 mx-1"></div> {/* เส้นคั่น */}
+            <div className="w-px h-6 bg-gray-300 mx-1"></div> 
             <button
               onClick={handleLogout}
               className="px-4 py-1.5 rounded-lg text-sm font-bold text-red-500 hover:bg-red-50 hover:text-red-600 transition-all"
@@ -508,7 +589,7 @@ export default function AdminPage() {
                   onClick={() => setListTab("history")} 
                   className={`flex-1 min-w-[120px] py-1.5 px-3 text-sm font-bold rounded-lg transition-all whitespace-nowrap ${listTab === "history" ? "bg-white text-gray-800 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
                 >
-                  📁 ประวัติ
+                  📁 ประวัติย้อนหลัง
                 </button>
               </div>
             )}
@@ -608,7 +689,7 @@ export default function AdminPage() {
                                 )}
                                 {booking.status === "confirmed" && (
                                   <button onClick={() => updateBookingStatus(booking.id, "completed")} className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-md transition-colors flex items-center gap-1">
-                                    เช็คอิน
+                                    เช็คอิน 🎫
                                   </button>
                                 )}
                                 {booking.status === "pending" && (
@@ -811,7 +892,7 @@ export default function AdminPage() {
         )}
       </div>
 
-      {/* 🎯 สลับใช้ sportCfg จากตัว selectedBooking เสมอ เพื่อแก้บั๊กโหมด all */}
+      {/* สลับใช้ sportCfg จากตัว selectedBooking เสมอ เพื่อแก้บั๊กโหมด all */}
       {selectedBooking && (
         <BookingDetailModal
           booking={selectedBooking}

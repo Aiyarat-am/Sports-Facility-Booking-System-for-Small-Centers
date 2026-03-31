@@ -41,8 +41,10 @@ export default function BookingPage() {
   const [authError, setAuthError] = useState("");
   const [isAuthLoading, setIsAuthLoading] = useState(false);
   
-  // 🎯 State สำหรับกั้นหน้าจอตอนกำลังเตะแอดมินกลับไปหลังบ้าน
   const [isAdminRedirecting, setIsAdminRedirecting] = useState(false);
+
+  // 🎯 เพิ่ม State สำหรับจัดการกล่องแจ้งเตือนแบบกำหนดเอง (แทน alert ธรรมดา)
+  const [customAlert, setCustomAlert] = useState("");
 
   const [showForm, setShowForm] = useState(false);
   const [formData, setFormData] = useState({ name: "", tel: "", sport: "", courtNumber: "1", date: "", time: "" });
@@ -89,12 +91,11 @@ export default function BookingPage() {
     return `${m}:${s}`;
   };
 
-  // 🎯 ยามเฝ้าประตู: ดักจับอีเมลแอดมินทุกครั้งที่มีการเข้าเว็บหรือรีเฟรช
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       if (currentUser && currentUser.email?.toLowerCase() === "admin555@email.com") {
-        setIsAdminRedirecting(true); // เปิดม่านบังหน้าจอ
-        router.replace("/admin"); // ใช้ replace เพื่อทำลายปุ่ม Back
+        setIsAdminRedirecting(true); 
+        router.replace("/admin"); 
       } else {
         setUser(currentUser);
       }
@@ -149,7 +150,6 @@ export default function BookingPage() {
         await createUserWithEmailAndPassword(auth, authEmail, authPassword);
       }
       
-      // ลอจิกสำหรับปุ่มตอนล็อกอินยังเก็บไว้เผื่อเหนียวครับ
       if (authEmail.toLowerCase() === "admin555@email.com") {
         setIsAdminRedirecting(true);
         router.replace("/admin");
@@ -242,7 +242,8 @@ export default function BookingPage() {
 
   const handleBookingSubmit = async () => {
     if (!formData.name || !formData.tel || !formData.time || !formData.sport) {
-      alert("กรุณากรอกข้อมูลและเลือกเวลาให้ครบถ้วนครับ");
+      // 🎯 เปลี่ยนจากการใช้ alert()
+      setCustomAlert("กรุณากรอกข้อมูลและเลือกเวลาให้ครบถ้วนครับ");
       return;
     }
     if (!user) {
@@ -254,7 +255,7 @@ export default function BookingPage() {
     const cutoffTime = new Date();
     cutoffTime.setMinutes(cutoffTime.getMinutes() + 30);
     if (startDateTime <= cutoffTime) {
-       alert("ไม่สามารถจองได้ เนื่องจากต้องจองล่วงหน้าอย่างน้อย 30 นาทีครับ");
+       setCustomAlert("ไม่สามารถจองได้ เนื่องจากต้องจองล่วงหน้าอย่างน้อย 30 นาทีครับ");
        return;
     }
 
@@ -328,7 +329,7 @@ export default function BookingPage() {
       }, 15 * 60000);
       
     } catch (error: any) {
-      alert(error.message || "ไม่สามารถจองได้ กรุณาลองใหม่");
+      setCustomAlert(error.message || "ไม่สามารถจองได้ กรุณาลองใหม่");
     } finally {
       setIsSubmitting(false);
     }
@@ -338,7 +339,7 @@ export default function BookingPage() {
     const file = e.target.files?.[0];
     if (!file) return;
     if (file.size > 5 * 1024 * 1024) {
-        alert("ไฟล์รูปภาพมีขนาดใหญ่เกินไป (ห้ามเกิน 5MB)");
+        setCustomAlert("ไฟล์รูปภาพมีขนาดใหญ่เกินไป (ห้ามเกิน 5MB)");
         return;
     }
     setSelectedFile(file);
@@ -346,7 +347,7 @@ export default function BookingPage() {
 
   const confirmAndUploadSlip = () => {
     if (!selectedFile || !currentBookingId) {
-        alert("กรุณาเลือกไฟล์รูปภาพสลิปก่อนครับ");
+        setCustomAlert("กรุณาเลือกไฟล์รูปภาพสลิปก่อนครับ");
         return;
     };
 
@@ -378,14 +379,14 @@ export default function BookingPage() {
             status: "uploaded" 
         })
           .then(() => {
-            alert("อัปโหลดสลิปสำเร็จ! รอพนักงานตรวจสอบ");
+            setCustomAlert("อัปโหลดสลิปสำเร็จ! รอพนักงานตรวจสอบ");
             setCurrentBookingId(null); 
             setCurrentShortId(null);
             setCurrentExpiresAt(null);
             setSelectedFile(null);
             setShowHistory(true); 
           })
-          .catch(() => alert("เกิดข้อผิดพลาดในการอัปโหลดไฟล์"))
+          .catch(() => setCustomAlert("เกิดข้อผิดพลาดในการอัปโหลดไฟล์"))
           .finally(() => setIsSubmitting(false));
       };
       img.src = event.target?.result as string;
@@ -402,7 +403,7 @@ export default function BookingPage() {
 
       setUserBookings(prev => prev.map(b => b.id === currentBookingId ? { ...b, status: "cancelled" } : b));
 
-      alert("ยกเลิกการจองเรียบร้อยแล้ว คิวนี้เปิดว่างให้ท่านอื่นจองได้แล้วครับ");
+      setCustomAlert("ยกเลิกการจองเรียบร้อยแล้ว");
       setCurrentBookingId(null);
       setCurrentShortId(null);
       setCurrentExpiresAt(null);
@@ -410,7 +411,7 @@ export default function BookingPage() {
       setShowCancelConfirm(false);
     } catch (error) {
       console.error("Error cancelling booking:", error);
-      alert("เกิดข้อผิดพลาดในการยกเลิก กรุณาลองใหม่");
+      setCustomAlert("เกิดข้อผิดพลาดในการยกเลิก กรุณาลองใหม่");
     } finally {
       setIsCancelling(false);
     }
@@ -418,7 +419,6 @@ export default function BookingPage() {
 
   // ─── Rendering ──────────────────────────────────────────────────────────────
 
-  // 🎯 ถ้าเป็นแอดมินกำลังถูกเตะไปหน้าหลังบ้าน ให้โชว์หน้าจอดำๆ พร้อมข้อความเลยครับ
   if (isAdminRedirecting) {
     return (
       <div className="min-h-screen bg-gray-900 flex items-center justify-center">
@@ -433,6 +433,25 @@ export default function BookingPage() {
   return (
     <div className="relative min-h-screen flex items-center justify-center overflow-hidden">
       
+      {/* 🎯 แสดงหน้าต่างแจ้งเตือนแบบ Custom (แทน alert ธรรมดา) */}
+      {customAlert && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-white p-6 rounded-3xl shadow-2xl max-w-sm w-full text-center animate-fade-in-up">
+            <div className="text-blue-500 text-5xl mb-4">💬</div>
+            <h3 className="text-xl font-bold text-gray-800 mb-2">CourtHub แจ้งเตือน</h3>
+            <p className="text-gray-600 mb-6 leading-relaxed">
+              {customAlert}
+            </p>
+            <button 
+              onClick={() => setCustomAlert("")} 
+              className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold transition-all shadow-md"
+            >
+              ตกลง
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="fixed top-0 left-0 right-0 z-50 flex items-center justify-between p-6 bg-gradient-to-b from-black/50 to-transparent">
         <span className="text-xl font-bold text-white tracking-wider">CourtHub</span>
         {user ? (
