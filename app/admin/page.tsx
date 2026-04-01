@@ -10,6 +10,7 @@ import {
   updateDoc,
 } from "firebase/firestore";
 import { signOut, onAuthStateChanged } from "firebase/auth";
+import { deleteDoc } from "firebase/firestore"; 
 import { db, auth } from "../../lib/firebase";
 import { useRouter } from "next/navigation"; 
 
@@ -63,7 +64,6 @@ function isSameDay(a: Date, b: Date) {
   );
 }
 
-// 🎯 แก้ไขปัญหา Timezone +7 โดยใช้ Local Time ล้วนๆ แทน toISOString()
 function toDateKey(d: Date) {
   const year = d.getFullYear();
   const month = String(d.getMonth() + 1).padStart(2, "0");
@@ -254,6 +254,7 @@ export default function AdminPage() {
     return () => clearInterval(timer);
   }, []);
 
+  // 🎯 เติมฟังก์ชันที่หายไปกลับเข้ามาครับ
   const formatCountdown = (expiresAt: Date | undefined) => {
     if (!expiresAt) return null;
     const diff = expiresAt.getTime() - currentTime.getTime();
@@ -291,14 +292,26 @@ export default function AdminPage() {
       q,
       (snapshot) => {
         const now = new Date();
+        const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000; 
+
         const loadedBookings = snapshot.docs.map((d) => {
           const b = { id: d.id, ...d.data() } as Booking;
+          
           if (b.status === "pending" && b.expiresAt && b.expiresAt.toDate() < now) {
             b.status = "cancelled"; 
             updateDoc(doc(db, "bookings", b.id), { status: "cancelled" }).catch(console.error); 
           }
+
+          if ((b.status === "completed" || b.status === "cancelled") && b.createdAt) {
+             const createdTime = b.createdAt.toDate().getTime();
+             if (now.getTime() - createdTime > THIRTY_DAYS_MS) {
+                deleteDoc(doc(db, "bookings", b.id)).catch(console.error);
+                return null; 
+             }
+          }
+
           return b;
-        });
+        }).filter(b => b !== null) as Booking[]; 
 
         setBookings(loadedBookings);
         setIsLoading(false);

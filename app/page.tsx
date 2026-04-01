@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { collection, doc, runTransaction, query, where, getDocs, updateDoc, onSnapshot } from "firebase/firestore";
+import { collection, doc, runTransaction, query, where, getDocs, updateDoc, onSnapshot, getDoc, setDoc } from "firebase/firestore";
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, User } from "firebase/auth";
 import { db, auth } from "../lib/firebase";
 import { useRouter } from "next/navigation"; 
@@ -42,9 +42,13 @@ export default function BookingPage() {
   const [isAuthLoading, setIsAuthLoading] = useState(false);
   
   const [isAdminRedirecting, setIsAdminRedirecting] = useState(false);
-
-  // 🎯 เพิ่ม State สำหรับจัดการกล่องแจ้งเตือนแบบกำหนดเอง (แทน alert ธรรมดา)
   const [customAlert, setCustomAlert] = useState("");
+
+  // 🎯 State สำหรับระบบโปรไฟล์
+  const [userProfile, setUserProfile] = useState<{name: string, tel: string} | null>(null);
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [profileFormData, setProfileFormData] = useState({ name: "", tel: "" });
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
 
   const [showForm, setShowForm] = useState(false);
   const [formData, setFormData] = useState({ name: "", tel: "", sport: "", courtNumber: "1", date: "", time: "" });
@@ -92,12 +96,27 @@ export default function BookingPage() {
   };
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser && currentUser.email?.toLowerCase() === "admin555@email.com") {
         setIsAdminRedirecting(true); 
         router.replace("/admin"); 
       } else {
         setUser(currentUser);
+        // 🎯 โหลดข้อมูลโปรไฟล์จาก Collection "users" ทันทีที่ล็อกอิน
+        if (currentUser) {
+          try {
+            const userDoc = await getDoc(doc(db, "users", currentUser.uid));
+            if (userDoc.exists()) {
+              setUserProfile(userDoc.data() as {name: string, tel: string});
+            } else {
+              setUserProfile(null);
+            }
+          } catch (err) {
+            console.error("Error loading profile", err);
+          }
+        } else {
+          setUserProfile(null);
+        }
       }
     });
     return () => unsubscribe();
@@ -146,17 +165,19 @@ export default function BookingPage() {
     try {
       if (isLoginMode) {
         await signInWithEmailAndPassword(auth, authEmail, authPassword);
+        if (authEmail.toLowerCase() === "admin555@email.com") {
+          setIsAdminRedirecting(true);
+          router.replace("/admin");
+        } else {
+          setShowLoginPopup(false);
+        }
       } else {
+        // 🎯 กรณีสมัครสมาชิกใหม่ ให้เปิดหน้าต่างกรอกชื่อ-เบอร์โทรทันที
         await createUserWithEmailAndPassword(auth, authEmail, authPassword);
-      }
-      
-      if (authEmail.toLowerCase() === "admin555@email.com") {
-        setIsAdminRedirecting(true);
-        router.replace("/admin");
-      } else {
         setShowLoginPopup(false);
+        setProfileFormData({ name: "", tel: "" });
+        setShowProfileModal(true);
       }
-
       setAuthEmail("");
       setAuthPassword("");
     } catch (error: any) {
@@ -166,6 +187,32 @@ export default function BookingPage() {
       else setAuthError("เกิดข้อผิดพลาด กรุณาลองใหม่");
     } finally {
       setIsAuthLoading(false);
+    }
+  };
+
+  // 🎯 ฟังก์ชันบันทึกโปรไฟล์ลง Collection "users"
+  const handleProfileSubmit = async () => {
+    if (!profileFormData.name || !profileFormData.tel) {
+      setCustomAlert("กรุณากรอกชื่อและเบอร์โทรศัพท์ให้ครบถ้วนครับ");
+      return;
+    }
+    if (!user) return;
+    
+    setIsSubmitting(true);
+    try {
+      await setDoc(doc(db, "users", user.uid), {
+        name: profileFormData.name,
+        tel: profileFormData.tel,
+        email: user.email
+      });
+      setUserProfile({ name: profileFormData.name, tel: profileFormData.tel });
+      setShowProfileModal(false);
+      setCustomAlert("อัปเดตข้อมูลโปรไฟล์เรียบร้อยแล้วครับ");
+    } catch (error) {
+      console.error(error);
+      setCustomAlert("เกิดข้อผิดพลาดในการบันทึกโปรไฟล์");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -192,12 +239,26 @@ export default function BookingPage() {
     signOut(auth);
     setShowForm(false);
     setShowHistory(false);
+    setIsDropdownOpen(false);
+    setUserProfile(null);
     resetFormData(); 
   };
 
   const handleBookNowClick = () => {
-    if (user) setShowForm(true);
-    else setShowLoginPopup(true);
+    if (user) {
+      // 🎯 เช็คว่ามีโปรไฟล์หรือยัง ถ้าไม่มีบังคับกรอกก่อน
+      if (!userProfile?.name || !userProfile?.tel) {
+        setProfileFormData({ name: "", tel: "" });
+        setShowProfileModal(true);
+        setCustomAlert("กรุณากรอกชื่อและเบอร์โทรศัพท์ก่อนทำการจองครับ");
+        return;
+      }
+      // 🎯 ดึงชื่อ-เบอร์โทรมาใส่ฟอร์มให้อัตโนมัติ
+      setFormData(prev => ({ ...prev, name: userProfile.name, tel: userProfile.tel }));
+      setShowForm(true);
+    } else {
+      setShowLoginPopup(true);
+    }
   };
 
   useEffect(() => {
@@ -242,7 +303,6 @@ export default function BookingPage() {
 
   const handleBookingSubmit = async () => {
     if (!formData.name || !formData.tel || !formData.time || !formData.sport) {
-      // 🎯 เปลี่ยนจากการใช้ alert()
       setCustomAlert("กรุณากรอกข้อมูลและเลือกเวลาให้ครบถ้วนครับ");
       return;
     }
@@ -403,7 +463,7 @@ export default function BookingPage() {
 
       setUserBookings(prev => prev.map(b => b.id === currentBookingId ? { ...b, status: "cancelled" } : b));
 
-      setCustomAlert("ยกเลิกการจองเรียบร้อยแล้ว");
+      setCustomAlert("ยกเลิกการจองเรียบร้อยแล้ว คิวนี้เปิดว่างให้ท่านอื่นจองได้แล้วครับ");
       setCurrentBookingId(null);
       setCurrentShortId(null);
       setCurrentExpiresAt(null);
@@ -433,7 +493,7 @@ export default function BookingPage() {
   return (
     <div className="relative min-h-screen flex items-center justify-center overflow-hidden">
       
-      {/* 🎯 แสดงหน้าต่างแจ้งเตือนแบบ Custom (แทน alert ธรรมดา) */}
+      {/* หน้าต่าง Custom Alert */}
       {customAlert && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
           <div className="bg-white p-6 rounded-3xl shadow-2xl max-w-sm w-full text-center animate-fade-in-up">
@@ -452,31 +512,90 @@ export default function BookingPage() {
         </div>
       )}
 
+      {/* 🎯 หน้าต่างจัดการโปรไฟล์ (แสดงตอนสมัครใหม่ หรือกดแก้ไข) */}
+      {showProfileModal && (
+        <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl p-8 max-w-sm w-full relative shadow-2xl animate-fade-in-up">
+            {/* ถ้ามีโปรไฟล์แล้วถึงจะมีปุ่มปิดได้ (บังคับคนใหม่ให้กรอก) */}
+            {userProfile?.name && (
+              <button onClick={() => setShowProfileModal(false)} className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-full border border-gray-200 text-gray-400 hover:bg-gray-100 transition-colors">✕</button>
+            )}
+            <h2 className="text-2xl font-bold text-gray-800 mb-2">ข้อมูลส่วนตัว</h2>
+            <p className="text-sm text-gray-500 mb-6">กรุณากรอกข้อมูลให้ครบถ้วนเพื่อใช้ในการจองสนามครับ</p>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-gray-600 text-sm mb-2 font-medium">ชื่อ-นามสกุล</label>
+                <input type="text" value={profileFormData.name} onChange={(e) => setProfileFormData({...profileFormData, name: e.target.value})} className="w-full border border-gray-200 p-3 rounded-lg focus:outline-none focus:border-blue-500 text-gray-900" placeholder="ชื่อของคุณ" required />
+              </div>
+              <div>
+                <label className="block text-gray-600 text-sm mb-2 font-medium">เบอร์โทรศัพท์</label>
+                <input type="tel" value={profileFormData.tel} onChange={(e) => setProfileFormData({...profileFormData, tel: e.target.value})} className="w-full border border-gray-200 p-3 rounded-lg focus:outline-none focus:border-blue-500 text-gray-900" placeholder="08x-xxx-xxxx" required />
+              </div>
+              <button onClick={handleProfileSubmit} disabled={isSubmitting} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl transition-all shadow-md mt-4 disabled:bg-blue-300">
+                {isSubmitting ? "กำลังบันทึก..." : "บันทึกข้อมูล"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* แถบเมนูด้านบน (รวมระบบ Dropdown) */}
       <div className="fixed top-0 left-0 right-0 z-50 flex items-center justify-between p-6 bg-gradient-to-b from-black/50 to-transparent">
         <span className="text-xl font-bold text-white tracking-wider">CourtHub</span>
         {user ? (
-          <div className="flex items-center gap-4 bg-black/40 backdrop-blur-md px-5 py-2.5 rounded-full border border-white/10 shadow-lg">
-            <button 
-              onClick={() => setShowHistory(true)}
-              className="text-white font-semibold hover:text-green-400 transition-colors text-sm flex items-center gap-2"
+          <div className="relative">
+            {/* 🎯 ปุ่มโปรไฟล์แบบ Dropdown */}
+            <div 
+              onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+              className="flex items-center gap-3 bg-black/40 backdrop-blur-md px-5 py-2.5 rounded-full border border-white/10 shadow-lg cursor-pointer hover:bg-black/60 transition-colors"
             >
-              📋 ประวัติ
-            </button>
-            <div className="w-px h-4 bg-white/30"></div>
-            <span className="text-white font-medium text-sm">สวัสดี, <span className="text-green-400">{getUserName()}</span></span>
-            <button 
-              onClick={handleLogout}
-              className="text-sm text-red-400 hover:text-red-300 font-bold ml-2"
-            >
-              ออก
-            </button>
+              <div className="w-6 h-6 bg-green-500 rounded-full flex items-center justify-center text-white text-xs font-bold">
+                {userProfile?.name ? userProfile.name.charAt(0).toUpperCase() : "U"}
+              </div>
+              <span className="text-white font-medium text-sm">
+                สวัสดี, <span className="text-green-400">{userProfile?.name || getUserName()}</span>
+              </span>
+              <span className="text-white/50 text-xs ml-1">▼</span>
+            </div>
+
+            {/* 🎯 เมนู Dropdown */}
+            {isDropdownOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setIsDropdownOpen(false)}></div>
+                <div className="absolute right-0 mt-3 w-48 bg-white rounded-2xl shadow-xl overflow-hidden z-50 border border-gray-100 animate-fade-in-up">
+                  <button 
+                    onClick={() => { setShowHistory(true); setIsDropdownOpen(false); }}
+                    className="w-full text-left px-5 py-3.5 text-sm font-semibold text-gray-700 hover:bg-gray-50 flex items-center gap-3 border-b border-gray-50 transition-colors"
+                  >
+                    <span>📋</span> ประวัติการจอง
+                  </button>
+                  <button 
+                    onClick={() => { 
+                      setProfileFormData({ name: userProfile?.name || "", tel: userProfile?.tel || "" });
+                      setShowProfileModal(true); 
+                      setIsDropdownOpen(false); 
+                    }}
+                    className="w-full text-left px-5 py-3.5 text-sm font-semibold text-gray-700 hover:bg-gray-50 flex items-center gap-3 border-b border-gray-50 transition-colors"
+                  >
+                    <span>⚙️</span> แก้ไขโปรไฟล์
+                  </button>
+                  <button 
+                    onClick={() => { handleLogout(); setIsDropdownOpen(false); }}
+                    className="w-full text-left px-5 py-3.5 text-sm font-bold text-red-500 hover:bg-red-50 flex items-center gap-3 transition-colors"
+                  >
+                    <span>🚪</span> ออกจากระบบ
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         ) : (
           <button 
             onClick={() => setShowLoginPopup(true)}
-            className="px-6 py-2 border-2 border-white text-white rounded-full font-bold hover:bg-white hover:text-gray-900 transition-colors"
+            className="px-6 py-2.5 border-2 border-white text-white rounded-full font-bold hover:bg-white hover:text-gray-900 transition-colors shadow-lg"
           >
-            Login
+            เข้าสู่ระบบ
           </button>
         )}
       </div>
