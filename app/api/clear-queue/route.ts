@@ -9,7 +9,12 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   try {
     // 1. ให้ API แอบล็อกอินด้วยสิทธิ์ Admin เพื่อให้มีสิทธิ์แก้ไขฐานข้อมูล
-    await signInWithEmailAndPassword(auth, "admin555@email.com", "ad555min");
+    // ลบบรรทัดเดิมทิ้ง แล้วใส่บรรทัดนี้แทน
+await signInWithEmailAndPassword(
+  auth, 
+  process.env.ADMIN_EMAIL as string, 
+  process.env.ADMIN_PASSWORD as string
+);
 
     const now = new Date();
 
