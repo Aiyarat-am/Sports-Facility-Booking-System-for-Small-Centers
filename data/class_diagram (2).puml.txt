@@ -1,0 +1,153 @@
+@startuml
+skinparam classAttributeIconSize 0
+skinparam classFontSize 13
+skinparam classFontStyle bold
+skinparam classBackgroundColor #FAFAFA
+skinparam classBorderColor #555555
+skinparam arrowColor #333333
+skinparam shadowing false
+skinparam linetype ortho
+
+title Sports Facilities Booking Management System\nClass Diagram
+
+' ========== ENUMERATIONS ==========
+
+enum SportType {
+    BADMINTON
+    FOOTBALL
+    BASKETBALL
+}
+
+enum BookingStatus {
+    PENDING
+    CONFIRMED
+    CANCELLED
+    CHECKED_IN
+}
+
+enum SlotStatus {
+    AVAILABLE
+    PENDING
+    BOOKED
+}
+
+enum SlipStatus {
+    PENDING
+    APPROVED
+    REJECTED
+}
+
+' ========== BASE CLASS ==========
+
+abstract class User {
+    - userId : String
+    - name : String
+    - phone : String
+    - email : String
+    - passwordHash : String
+    - createdAt : DateTime
+    + login(email: String, password: String) : Boolean
+    + logout() : void
+    + getProfile() : User
+}
+
+' ========== ACTORS ==========
+
+class Customer {
+    + viewCourtSchedule(sportType: SportType, date: Date) : List<TimeSlot>
+    + createBooking(courtId: String, slotId: String) : Booking
+    + uploadPaymentSlip(bookingId: String, image: File) : PaymentSlip
+    + viewBookingHistory() : List<Booking>
+    + viewDigitalReceipt(bookingId: String) : DigitalReceipt
+}
+
+class Staff {
+    - staffCode : String
+    + searchBookingById(bookingId: String) : Booking
+    + approvePaymentSlip(slipId: String) : void
+    + rejectPaymentSlip(slipId: String) : void
+    + checkIn(bookingId: String) : void
+    + viewPendingSlips() : List<PaymentSlip>
+}
+
+' ========== DOMAIN CLASSES ==========
+
+class Court {
+    - courtId : String
+    - sportType : SportType
+    - pricePerHour : Float
+    - isActive : Boolean
+    + getAvailableSlots(date: Date) : List<TimeSlot>
+    + checkAvailability(date: Date, hour: Integer) : Boolean
+    + activate() : void
+    + deactivate() : void
+}
+
+class TimeSlot {
+    - slotId : String
+    - startTime : DateTime
+    - endTime : DateTime
+    - status : SlotStatus
+    + isAvailable() : Boolean
+    + reserve() : void
+    + release() : void
+}
+
+class Booking {
+    - bookingId : String
+    - bookingDate : DateTime
+    - status : BookingStatus
+    - pendingExpiresAt : DateTime
+    - totalPrice : Float
+    + confirm() : void
+    + cancel() : void
+    + checkIn() : void
+    + isExpired() : Boolean
+    + generateBookingId() : String
+}
+
+class PaymentSlip {
+    - slipId : String
+    - imageBase64 : String
+    - uploadedAt : DateTime
+    - status : SlipStatus
+    + approve() : void
+    + reject():void
+    + getImageBase64() : String
+}
+
+class DigitalReceipt {
+    - receiptId : String
+    - customerName : String
+    - bookingDate : Date
+    - startTime : DateTime
+    - endTime : DateTime
+    - totalAmount : Float
+    + display() : String
+    + generate(booking: Booking) : DigitalReceipt
+}
+
+
+' ========== INHERITANCE ==========
+
+User <|-- Customer
+User <|-- Staff
+
+' ========== ASSOCIATIONS ==========
+
+Customer "1" --> "0..*" Booking : creates
+Staff "1" --> "0..*" PaymentSlip : reviews
+Staff "1" --> "0..*" Booking : manages check-in
+
+Court "1" *-- "1..*" TimeSlot : has
+Court --> SportType
+
+Booking "1" --> "1" Court : reserves
+Booking "1" --> "1" TimeSlot : occupies
+Booking "1" --> "0..1" PaymentSlip : has
+Booking "1" --> "0..1" DigitalReceipt : generates
+Booking --> BookingStatus
+
+TimeSlot --> SlotStatus
+PaymentSlip --> SlipStatus
+@enduml
