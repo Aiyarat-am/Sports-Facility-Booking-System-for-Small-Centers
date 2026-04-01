@@ -1,0 +1,12 @@
+version: '3.8'
+services:
+  sports-booking-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sports-booking-web
+    ports:
+      - "3000:3000"
+    restart: always
+    env_file:
+      - .env.local  # 🎯 จะดึง API Key ของ Firebase เข้าไปให้เองอัตโนมัติ
